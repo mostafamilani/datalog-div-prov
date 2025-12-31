@@ -1,5 +1,3 @@
-package org.datalog;
-
 import java.io.File;
 import java.io.FilenameFilter;
 import java.nio.file.*;
@@ -7,7 +5,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-public class SATBatchRunner {
+public class BatchRunner {
 
     private static final long PROCESS_TIME_OUT = 240;
 //    private static final long PROCESS_TIME_OUT = 15;

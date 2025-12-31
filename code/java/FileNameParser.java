@@ -1,5 +1,3 @@
-package org.datalog;
-
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;

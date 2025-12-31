@@ -1,4 +1,4 @@
-package org.datalog;
+import org.datalog.DatalogSAT;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
