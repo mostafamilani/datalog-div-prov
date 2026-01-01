@@ -90,31 +90,49 @@ public class LPModelEnumerator {
     }
     // ======================================================================
 
+    private static String joinPath(String dir, String fileName) {
+        if (dir == null || dir.isBlank()) return fileName;
+        return new File(dir, fileName).getPath();
+    }
+
     public static void main(String[] args) {
-        // CLI matches SATModelEnumerator style:
-        //   java LPModelEnumerator <downwardFile> [numModels=0] [numInitialModels=2] [print=false] [extraAnalysis=false]
-        if (args.length < 1) {
-            System.err.println("Usage: java LPModelEnumerator <downwardFile> [numModels] [numInitialModels=2] [print=false] [extraAnalysis=false]");
+        // Updated CLI (matches SATModelEnumerator changes):
+        //   java LPModelEnumerator <downwardFile> <outDir> [numModels=0] [numInitialModels=2] [print=false] [extraAnalysis=false]
+        if (args.length < 2) {
+            System.err.println("Usage: java LPModelEnumerator <downwardFile> <outDir> [numModels=0] [numInitialModels=2] [print=false] [extraAnalysis=false]");
             System.exit(1);
         }
 
         final long tAllStart = now();
         final String downwardFile = args[0];
+        final String outDir = args[1];
+
+        // Ensure output directory exists
+        File outDirFile = new File(outDir);
+        if (!outDirFile.exists()) {
+            if (!outDirFile.mkdirs()) {
+                System.err.println("Could not create output directory: " + outDirFile.getAbsolutePath());
+                System.exit(2);
+            }
+        } else if (!outDirFile.isDirectory()) {
+            System.err.println("Output path is not a directory: " + outDirFile.getAbsolutePath());
+            System.exit(2);
+        }
 
         // Goal parsing (same intent as your SAT code)
-        // Adjust this if your FileNameParser is in a package.
         String goal = FileNameParser.goalFromFilename(downwardFile);
 
-        int idx = 1;
+        int idx = 2; // optional args start here now
         int numModels = (args.length > idx && isInt(args[idx])) ? Integer.parseInt(args[idx].trim()) : 0; // 0 = unlimited
         final int numInitialModels = (args.length > idx + 1 && isInt(args[idx + 1])) ? Integer.parseInt(args[idx + 1].trim()) : 2;
         final boolean printModels = (args.length > idx + 2) ? parseBool(args[idx + 2], false) : false;
         final boolean extraAnalysis = (args.length > idx + 3) ? parseBool(args[idx + 3], false) : false;
 
-        // ---- Log file name includes numModels and numInitialModels ----
-        int dot = downwardFile.lastIndexOf('.');
-        String basePath = (dot > 0 ? downwardFile.substring(0, dot) : downwardFile);
-        final String logFile = String.format("%s-initial-%d-total-%d.lp.log", basePath, numInitialModels, numModels);
+        // ---- Log file name includes numModels and numInitialModels (now under outDir) ----
+        final String base = baseName(downwardFile);
+        final String logName = String.format("%s-initial-%d-total-%d.lp.log", base, numInitialModels, numModels);
+        final String logFile = joinPath(outDir, logName);
+
         File lf = new File(logFile);
         if (lf.exists() && lf.isFile()) {
             System.out.println("[SKIP] Log already exists for this configuration: " + lf.getAbsolutePath());
@@ -134,6 +152,7 @@ public class LPModelEnumerator {
             log("================================================================");
             logf("RUN @ %s", ts);
             logf("downwardFile : %s", downwardFile);
+            logf("outDir       : %s", outDirFile.getAbsolutePath());
 
             GoalParts gpEcho = parseGoalFromFileName(downwardFile);
             if (gpEcho != null) {
@@ -318,7 +337,10 @@ public class LPModelEnumerator {
                 boolean finished = true;
                 for (int i = 2; i <= Math.min(MAX_INITIAL, modelCount) && finished; i++) {
                     log("Running more analysis for " + i + " models...");
-                    String[] newArgs = Arrays.copyOf(args, args.length - 1); // drop extraAnalysis flag
+
+                    // Keep same arg length; just adjust numModels/numInitialModels.
+                    // args = [downwardFile, outDir, numModels, numInitialModels, print, extraAnalysis]
+                    String[] newArgs = Arrays.copyOf(args, args.length);
                     newArgs[idx] = "0";            // numModels unlimited in sub-run
                     newArgs[idx + 1] = "" + i;     // numInitialModels = i
 
@@ -329,7 +351,7 @@ public class LPModelEnumerator {
                     cmdc.add(javaBin);
                     cmdc.add("-cp");
                     cmdc.add(System.getProperty("java.class.path"));
-                    cmdc.add("LPModelEnumerator");
+                    cmdc.add("LPModelEnumerator"); // keep your original main-class name as-is
 
                     cmdc.addAll(Arrays.asList(newArgs));
 

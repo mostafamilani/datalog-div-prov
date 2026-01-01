@@ -1,9 +1,5 @@
-import java.io.File;
-import java.io.FilenameFilter;
 import java.nio.file.*;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 public class BatchRunner {
 
@@ -11,53 +7,74 @@ public class BatchRunner {
 //    private static final long PROCESS_TIME_OUT = 15;
 
     /**
-     * Usage:
-     *   java org.datalog.SATBatchRunner <folder> [numModels=0] [numInitialModels=2] [print=false]
+     * Updated Usage:
+     *   java org.datalog.BatchRunner <inputFolder> <outputFolder> <mode:SAT|LP> [numModels=0] [numInitialModels=2] [print=false] [extraAnalysis=false]
      *
-     * Examples:
-     *   java org.datalog.SATBatchRunner /path/to/downward 0 2 false
-     *   java org.datalog.SATBatchRunner /path/to/downward 10 3 true
+     * Behavior:
+     * - Walks <inputFolder> recursively and finds all *.lp files.
+     * - Mirrors the relative subdirectory structure from input to output:
+     *     input:  <inputFolder>/.../X.lp
+     *     output: <outputFolder>/.../   (same relative parent path)
+     * - For each input file, spawns a JVM running either:
+     *     org.datalog.SATModelEnumerator  (mode=SAT)
+     *     LPModelEnumerator              (mode=LP)   <-- keep as you had it
      *
-     * For each .lp file such as:
-     *   15_subClassOf_AdrenalineHydrochloride_SubstanceOrPhysicalStructure.lp
-     *   15_subClassOf_Albumin_23_1_10075.lp
-     *
-     * We generate goals:
-     *   subClassOf("AdrenalineHydrochloride","SubstanceOrPhysicalStructure")
-     *   subClassOf("Albumin","23_1_10075")
-     *
-     * Then invoke:
-     *   SATModelEnumerator.main(new String[]{downwardFile, goal, String.valueOf(numModels), String.valueOf(numInitial), String.valueOf(print)});
+     * Invoked as:
+     *   <EnumeratorClass> <inputFile> <outDirForThisFile> <numModels> <numInitialModels> <print> <extraAnalysis>
      */
     public static void main(String[] args) {
         System.out.println("Updated on 2015-12-3 9:51! Press Enter to continue...");
         new java.util.Scanner(System.in).nextLine();
-        if (args.length < 1) {
-            System.err.println("Usage: java org.datalog.SATBatchRunner <folder> [numModels=0] [numInitialModels=2] [print=false]");
+
+        if (args.length < 3) {
+            System.err.println("Usage: java org.datalog.BatchRunner <inputFolder> <outputFolder> <mode:SAT|LP> [numModels=0] [numInitialModels=2] [print=false] [extraAnalysis=false]");
             System.exit(1);
         }
 
-        final Path folder = Paths.get(args[0]);
-        final int numModels        = (args.length >= 2 ? parseIntArg(args[1], 0) : 0);   // 0 = unlimited
-        final int numInitialModels = (args.length >= 3 ? parseIntArg(args[2], 2) : 2);
-        final boolean printModels  = (args.length >= 4 ? parseBoolArg(args[3], false) : false);
-        final boolean extraAnalysis  = (args.length >= 5 ? parseBoolArg(args[4], false) : false);
+        final Path inputFolder  = Paths.get(args[0]).toAbsolutePath().normalize();
+        final Path outputFolder = Paths.get(args[1]).toAbsolutePath().normalize();
+        final String modeRaw    = args[2];
 
-        if (!Files.isDirectory(folder)) {
-            System.err.println("Not a directory: " + folder.toAbsolutePath());
+        final Mode mode = parseMode(modeRaw);
+
+        final int numModels        = (args.length >= 4 ? parseIntArg(args[3], 0) : 0);   // 0 = unlimited
+        final int numInitialModels = (args.length >= 5 ? parseIntArg(args[4], 2) : 2);
+        final boolean printModels  = (args.length >= 6 ? parseBoolArg(args[5], false) : false);
+        final boolean extraAnalysis= (args.length >= 7 ? parseBoolArg(args[6], false) : false);
+
+        if (!Files.isDirectory(inputFolder)) {
+            System.err.println("Not a directory (inputFolder): " + inputFolder);
             System.exit(2);
         }
 
-        System.out.println("[SATBatchRunner] Scanning: " + folder.toAbsolutePath());
-        System.out.println("[SATBatchRunner] numModels=" + numModels + " (0 means unlimited), numInitialModels=" + numInitialModels + ", print=" + printModels);
+        // Ensure output folder exists
+        try {
+            Files.createDirectories(outputFolder);
+        } catch (Exception e) {
+            System.err.println("Could not create outputFolder: " + outputFolder + " (" + e.getMessage() + ")");
+            System.exit(2);
+        }
+        if (!Files.isDirectory(outputFolder)) {
+            System.err.println("Not a directory (outputFolder): " + outputFolder);
+            System.exit(2);
+        }
 
-        java.util.Set<Object> seenKeys = new java.util.HashSet<>();
-        java.util.Set<String> seenRealPaths = new java.util.HashSet<>();
+        final String enumeratorClass =
+                (mode == Mode.SAT) ? "org.datalog.SATModelEnumerator" : "LPModelEnumerator";
 
-        try (java.util.stream.Stream<Path> walk = java.nio.file.Files.walk(folder)) {
+        System.out.println("[BatchRunner] Scanning input : " + inputFolder);
+        System.out.println("[BatchRunner] Output root    : " + outputFolder);
+        System.out.println("[BatchRunner] Mode           : " + mode + " (" + enumeratorClass + ")");
+        System.out.println("[BatchRunner] numModels=" + numModels + " (0 means unlimited), numInitialModels=" + numInitialModels
+                + ", print=" + printModels + ", extraAnalysis=" + extraAnalysis);
+
+        Set<Object> seenKeys = new HashSet<>();
+        Set<String> seenRealPaths = new HashSet<>();
+
+        try (java.util.stream.Stream<Path> walk = Files.walk(inputFolder)) {
             int processed = 0, skipped = 0;
 
-            java.util.Iterator<Path> it = walk.iterator();
+            Iterator<Path> it = walk.iterator();
             while (it.hasNext()) {
                 Path lpFile = it.next();
 
@@ -67,18 +84,18 @@ public class BatchRunner {
 
                 try {
                     // Only regular files
-                    if (!java.nio.file.Files.isRegularFile(lpFile, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    if (!Files.isRegularFile(lpFile, LinkOption.NOFOLLOW_LINKS)) {
                         skipped++;
                         continue;
                     }
 
                     // Resolve identity & canonical path
                     java.nio.file.attribute.BasicFileAttributes attrs =
-                            java.nio.file.Files.readAttributes(lpFile,
+                            Files.readAttributes(lpFile,
                                     java.nio.file.attribute.BasicFileAttributes.class,
-                                    java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                                    LinkOption.NOFOLLOW_LINKS);
                     Object key = attrs.fileKey();
-                    Path real = lpFile.toRealPath(java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                    Path real = lpFile.toRealPath(LinkOption.NOFOLLOW_LINKS);
 
                     // Skip if we've already seen this physical file (handles aliases/symlinks/8.3 names)
                     boolean isDup = (key != null && !seenKeys.add(key))
@@ -89,39 +106,40 @@ public class BatchRunner {
                         continue;
                     }
 
-                    final String fileName = real.getFileName().toString();
-                    final String baseName = stripExtension(fileName);
+                    // Mirror relative structure: outDirForThisFile = outputFolder / relativePathParent
+                    Path rel = inputFolder.relativize(real);
+                    Path relParent = (rel.getParent() == null ? Paths.get("") : rel.getParent());
+                    Path outDirForThisFile = outputFolder.resolve(relParent).normalize();
 
-                    // Reuse the existing main of SATModelEnumerator (spawn new JVM)
-                    java.util.List<String> forwarded = new java.util.ArrayList<>();
+                    // Ensure per-file output dir exists
+                    Files.createDirectories(outDirForThisFile);
+
+                    // Forward args to the chosen Enumerator:
+                    //   <downwardFile> <outDir> <numModels> <numInitialModels> <print> <extraAnalysis>
+                    List<String> forwarded = new ArrayList<>();
                     forwarded.add(real.toString());
+                    forwarded.add(outDirForThisFile.toString());
                     forwarded.add(String.valueOf(numModels));
                     forwarded.add(String.valueOf(numInitialModels));
                     forwarded.add(String.valueOf(printModels));
                     forwarded.add(String.valueOf(extraAnalysis));
 
                     try {
-                        Object[] objects = forwarded.toArray();
-                        String[] newArgs = new String[objects.length];
-                        for (int i = 0; i < objects.length; i++) {
-                            Object object = objects[i];
-                            newArgs[i] = object.toString();
-                        }
-//                        SATModelEnumerator.main(newArgs);
-                        java.util.List<String> cmd = new java.util.ArrayList<>();
+                        List<String> cmd = new ArrayList<>();
                         String javaBin = System.getProperty("java.home")
                                 + java.io.File.separator + "bin" + java.io.File.separator
                                 + (System.getProperty("os.name").toLowerCase().contains("win") ? "java.exe" : "java");
                         cmd.add(javaBin);
                         cmd.add("-cp");
                         cmd.add(System.getProperty("java.class.path"));
-                        cmd.add("org.datalog.SATModelEnumerator"); // fully-qualified class name
+                        cmd.add(enumeratorClass);
                         cmd.addAll(forwarded);
 
                         System.out.println("[CMD] " + String.join(" ", cmd));
+                        System.out.println("[OUT] " + outDirForThisFile);
 
                         Process p = new ProcessBuilder(cmd)
-                                .inheritIO()          // stream child's stdout/stderr to this process
+                                .inheritIO()
                                 .start();
 
                         boolean finished = p.waitFor(PROCESS_TIME_OUT,
@@ -129,6 +147,13 @@ public class BatchRunner {
 
                         int exitCode;
                         if (!finished) {
+                            // Kill descendants first (Java 9+), then the process itself
+                            try {
+                                java.lang.ProcessHandle ph = p.toHandle();
+                                ph.descendants().forEach(h -> {
+                                    try { h.destroyForcibly(); } catch (Throwable ignored) {}
+                                });
+                            } catch (Throwable ignored) {}
                             p.destroyForcibly();
                             p.waitFor();
                             exitCode = 124; // timeout
@@ -137,12 +162,12 @@ public class BatchRunner {
                         }
 
                         if (exitCode != 0) {
-                            throw new RuntimeException("SATModelEnumerator exited with code " + exitCode);
+                            throw new RuntimeException(enumeratorClass + " exited with code " + exitCode);
                         }
 
                         processed++;
                     } catch (Throwable t) {
-                        System.err.println("[ERROR] Failure running SATModelEnumerator for " + fileName + ": " + t.getMessage());
+                        System.err.println("[ERROR] Failure running " + enumeratorClass + " for " + real.getFileName() + ": " + t.getMessage());
                         t.printStackTrace(System.err);
                     }
                 } catch (java.io.IOException ioe) {
@@ -151,15 +176,30 @@ public class BatchRunner {
                 }
             }
 
-            System.out.println("[SATBatchRunner] Done. Processed=" + processed + ", Skipped=" + skipped);
+            System.out.println("[BatchRunner] Done. Processed=" + processed + ", Skipped=" + skipped);
         } catch (java.io.IOException e) {
             System.err.println("[ERROR] Failed to walk folder: " + e.getMessage());
             System.exit(3);
         }
-
     }
 
-    // ----- Helpers -----
+    // ----- Mode + Helpers -----
+
+    private enum Mode { SAT, LP }
+
+    private static Mode parseMode(String s) {
+        if (s == null) {
+            System.err.println("Mode must be SAT or LP.");
+            System.exit(1);
+        }
+        String v = s.trim().toUpperCase(Locale.ROOT);
+        if (v.equals("SAT")) return Mode.SAT;
+        if (v.equals("LP")) return Mode.LP;
+
+        System.err.println("Invalid mode: " + s + " (expected SAT or LP)");
+        System.exit(1);
+        return Mode.SAT; // unreachable
+    }
 
     private static int parseIntArg(String s, int defVal) {
         try { return Integer.parseInt(s); } catch (Exception e) { return defVal; }
@@ -167,27 +207,9 @@ public class BatchRunner {
 
     private static boolean parseBoolArg(String s, boolean defVal) {
         if (s == null) return defVal;
-        String v = s.trim().toLowerCase();
+        String v = s.trim().toLowerCase(Locale.ROOT);
         if (v.equals("true") || v.equals("1") || v.equals("yes") || v.equals("y")) return true;
         if (v.equals("false") || v.equals("0") || v.equals("no") || v.equals("n")) return false;
         return defVal;
     }
-
-    private static String stripExtension(String name) {
-        int i = name.lastIndexOf('.');
-        return (i >= 0 ? name.substring(0, i) : name);
-    }
-
-    private static String escapeForQuotedArg(String s) {
-        // Escape embedded double quotes for safety; leave underscores/digits/letters as-is.
-        return s.replace("\"", "\\\"");
-    }
-
-    private static String buildGoal(String predicate, String arg1, String arg2) {
-        // Always quote both args to match your Python-produced queries.
-        String a1 = escapeForQuotedArg(arg1);
-        String a2 = escapeForQuotedArg(arg2);
-        return predicate + "(\"" + a1 + "\",\"" + a2 + "\")";
-    }
 }
-

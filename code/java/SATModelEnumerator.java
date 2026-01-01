@@ -10,11 +10,11 @@ import java.util.*;
 public class SATModelEnumerator {
 
     private static final int MAX_INITIAL = 4;
-//    private static final int MAX_INITIAL = 3;
+    //    private static final int MAX_INITIAL = 3;
     private static final int MAX_ITERATION = 5;
-//    private static final int MAX_ITERATION = 30;
+    //    private static final int MAX_ITERATION = 30;
     static final long PROCESS_TIME_OUT = 30;
-//    static final long PROCESS_TIME_OUT = 5;
+    //    static final long PROCESS_TIME_OUT = 5;
     // ========= Dual-output logger (stdout + file) =========
     private static PrintWriter outWriter = null;
 
@@ -106,35 +106,55 @@ public class SATModelEnumerator {
     }
     // ===============================================
 
+    private static String joinPath(String dir, String fileName) {
+        if (dir == null || dir.isBlank()) return fileName;
+        return new File(dir, fileName).getPath();
+    }
+
     public static void main(String[] args) {
-        // Flexible CLI:
-        //   java org.datalog.SATModelEnumerator <downwardFile> <goal> [numModels=0] [numInitialModels=2] [print=false]
-        //   java org.datalog.SATModelEnumerator <downwardFile> [numModels=0] [numInitialModels=2] [print=false]   (goal auto-parsed)
-        if (args.length < 1) {
-            System.err.println("Usage: java org.datalog.SATModelEnumerator <downwardFile> [goal|numModels] [numModels] [numInitialModels=2] [print=false]");
+        // Updated CLI:
+        //   java org.datalog.SATModelEnumerator <downwardFile> <outDir> [numModels=0] [numInitialModels=2] [print=false] [extraAnalysis=false]
+        //
+        // Notes:
+        // - goal is auto-parsed from filename (as before)
+        // - log file is written under <outDir>
+        if (args.length < 2) {
+            System.err.println("Usage: java org.datalog.SATModelEnumerator <downwardFile> <outDir> [numModels=0] [numInitialModels=2] [print=false] [extraAnalysis=false]");
             System.exit(1);
         }
 
         final long tAllStart = now();
 
         final String downwardFile = args[0];
+        final String outDir = args[1];
 
-        // ---- Decide whether the next arg is a goal or numeric flags ----
-        String goal = null;
-        int idx = 1;
+        // Ensure output directory exists
+        File outDirFile = new File(outDir);
+        if (!outDirFile.exists()) {
+            if (!outDirFile.mkdirs()) {
+                System.err.println("Could not create output directory: " + outDirFile.getAbsolutePath());
+                System.exit(2);
+            }
+        } else if (!outDirFile.isDirectory()) {
+            System.err.println("Output path is not a directory: " + outDirFile.getAbsolutePath());
+            System.exit(2);
+        }
 
-        goal = FileNameParser.goalFromFilename(downwardFile);
+        // ---- goal auto-parsed ----
+        String goal = FileNameParser.goalFromFilename(downwardFile);
 
-        // Remaining optional args
-        int numModels        = (args.length > idx    && isInt(args[idx]))     ? Integer.parseInt(args[idx].trim()) : 0; // 0 = unlimited
-        final int numInitialModels = (args.length > idx+1  && isInt(args[idx+1]))   ? Integer.parseInt(args[idx+1].trim()) : 2;
+        // Remaining optional args (start at index 2 now)
+        int idx = 2;
+        int numModels              = (args.length > idx    && isInt(args[idx]))       ? Integer.parseInt(args[idx].trim())     : 0; // 0 = unlimited
+        final int numInitialModels = (args.length > idx+1  && isInt(args[idx+1]))     ? Integer.parseInt(args[idx+1].trim())   : 2;
         final boolean printModels  = (args.length > idx+2) ? parseBool(args[idx+2], false) : false;
-        final boolean extraAnalysis  = (args.length > idx+3) ? parseBool(args[idx+3], false) : false;
+        final boolean extraAnalysis= (args.length > idx+3) ? parseBool(args[idx+3], false) : false;
 
-        // ---- Build log file name that includes numModels and numInitialModels ----
-        int dot = downwardFile.lastIndexOf('.');
-        String basePath = (dot > 0 ? downwardFile.substring(0, dot) : downwardFile);
-        final String logFile = String.format("%s-initial-%d-total-%d.log", basePath, numInitialModels, numModels);
+        // ---- Build log file name (now inside outDir) ----
+        String base = baseName(downwardFile);
+        final String logName = String.format("%s-initial-%d-total-%d.log", base, numInitialModels, numModels);
+        final String logFile = joinPath(outDir, logName);
+
         java.io.File lf = new java.io.File(logFile);
         if (lf.exists() && lf.isFile()) {
             System.out.println("[SKIP] Log already exists for this configuration: " + lf.getAbsolutePath());
@@ -157,6 +177,7 @@ public class SATModelEnumerator {
             log("================================================================");
             logf("RUN @ %s", ts);
             logf("downwardFile : %s", downwardFile);
+            logf("outDir       : %s", outDirFile.getAbsolutePath());
             GoalParts gpEcho = parseGoalFromFileName(downwardFile);
             if (gpEcho != null) {
                 logf("filename meta : count=%s, predicate=%s, arg1=%s, arg2=%s",
@@ -329,13 +350,14 @@ public class SATModelEnumerator {
             log("ExtraAnalysis: " + extraAnalysis);
             log("ModelCount: " + modelCount);
             if (extraAnalysis && modelCount > 1) {
-//                for (int i = 2; i <= modelCount; i++) {
                 boolean finished = true;
                 for (int i = 2; i <= Math.min(MAX_INITIAL, modelCount) & finished; i++) {
                     log("Running more analysis for " + i + " models...");
-                    String[] newArgs = Arrays.copyOf(args, args.length - 1);
-                    newArgs[idx] = "0";
-                    newArgs[idx+1] = "" + i;
+
+                    // keep same arg length; just adjust numModels/numInitialModels
+                    String[] newArgs = Arrays.copyOf(args, args.length);
+                    newArgs[idx] = "0";        // numModels
+                    newArgs[idx+1] = "" + i;   // numInitialModels
 
                     List<String> cmdc = new ArrayList<>();
                     String javaBin = System.getProperty("java.home")
@@ -345,9 +367,7 @@ public class SATModelEnumerator {
                     cmdc.add("-cp");
                     cmdc.add(System.getProperty("java.class.path"));
                     cmdc.add("org.datalog.SATModelEnumerator"); // fully-qualified class name
-                    ArrayList<String> forward = new ArrayList<>();
-                    Collections.addAll(forward, newArgs);
-                    cmdc.addAll(forward);
+                    cmdc.addAll(Arrays.asList(newArgs));
 
                     Process p = new ProcessBuilder(cmdc)
                             .inheritIO()
@@ -377,7 +397,6 @@ public class SATModelEnumerator {
                     if (exitCode != 0) {
                         throw new RuntimeException("SATModelEnumerator exited with code " + exitCode);
                     }
-//                    main(newArgs);
                 }
             }
             log("Exit!");
