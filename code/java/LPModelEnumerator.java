@@ -9,7 +9,11 @@ import java.util.*;
 public class LPModelEnumerator {
 
     private static final int MAX_INITIAL = 5;
+
+    // Interpret as "max number of ITERATIVE models" when numModels == -1
+    // (i.e., max models *after* the initial set).
     private static final int MAX_ITERATION = 10;
+
     static final long PROCESS_TIME_OUT = 30; // minutes (used in extraAnalysis)
 
     // ========= Dual-output logger (stdout + file) =========
@@ -100,9 +104,9 @@ public class LPModelEnumerator {
         //   java LPModelEnumerator <downwardFile> <outDir> [numModels=-1] [numInitialModels=2] [print=false] [extraAnalysis=false]
         //
         // numModels semantics:
-        //   -1 : iterate until no more models (unbounded)
+        //   -1 : iterate until no more models, but capped by MAX_ITERATION iterative models
         //    0 : DO NOT run iterative phase; only compute the initial set (numInitialModels)
-        //   >0 : total models desired (including initial); iterative continues until modelCount == numModels
+        //   >0 : total models desired (including initial); stop when modelCount == numModels (or UNSAT earlier)
 
         if (args.length < 2) {
             System.err.println("Usage: java LPModelEnumerator <downwardFile> <outDir> [numModels=-1] [numInitialModels=2] [print=false] [extraAnalysis=false]");
@@ -125,12 +129,12 @@ public class LPModelEnumerator {
             System.exit(2);
         }
 
-        // Goal parsing (same intent as your SAT code)
+        // Goal parsing
         String goal = FileNameParser.goalFromFilename(downwardFile);
 
         int idx = 2; // optional args start here now
 
-        // DEFAULT numModels is now -1 (unbounded iterative), not 0.
+        // Default numModels is -1 (capped-unbounded via MAX_ITERATION)
         int numModels = (args.length > idx && isInt(args[idx])) ? Integer.parseInt(args[idx].trim()) : -1;
 
         final int numInitialModels =
@@ -172,7 +176,7 @@ public class LPModelEnumerator {
             }
 
             logf("goal          : %s", goal);
-            logf("numModels     : %d (-1=unbounded iterative, 0=only initial set)", numModels);
+            logf("numModels     : %d (-1=capped-unbounded via MAX_ITERATION=%d iterative, 0=only initial set)", numModels, MAX_ITERATION);
             logf("numInitial    : %d", numInitialModels);
             logf("print facts   : %s", printModels ? "true" : "false");
             log("----------------------------------------------------------------");
@@ -181,7 +185,6 @@ public class LPModelEnumerator {
             final long tBuildStart = now();
             DatalogLP lp = new DatalogLP();
 
-            // We want the multi-copy solver to compute initial diverse solutions
             long handle = lp.getLPEncodingWithNumSolverCopiesHandle(downwardFile, goal, numInitialModels);
             long solver = lp.getLPEncodingSolverHandle(handle);
             long solverCopy = lp.getLPEncodingCopySolverHandle(handle);
@@ -207,15 +210,11 @@ public class LPModelEnumerator {
                             long var0 = lp.getVariableNameInCopy(handle, baseVar, i);
                             long var1 = lp.getVariableNameInCopy(handle, baseVar, j);
 
-                            // aux = XOR(var0, var1)
                             long aux = lp.addXorAxiomatizationToSolver(solverCopy, List.of(var0, var1));
                             auxVariables.add(aux);
                         }
 
-                        // Maximize differences between copy i and j
                         lp.addVariablesToObjective(solverCopy, auxVariables);
-
-                        // Require at least one difference
                         lp.addGreaterOrEqualToConstantConstraint(solverCopy, auxVariables, 1);
                     }
                 }
@@ -257,15 +256,13 @@ public class LPModelEnumerator {
                     if (val) {
                         if (printModels) logf("  %s = true", dbVarMap.get(baseVar));
                         trueCount++;
-                        modelBlocker.add(-baseVar); // (1 - x_base) in blocker
+                        modelBlocker.add(-baseVar);
                     } else {
-                        modelBlocker.add(baseVar);  // x_base in blocker
+                        modelBlocker.add(baseVar);
                     }
                 }
 
                 if (printModels) logf("  (#true vars: %d)", trueCount);
-
-                // Enforce freshness on main solver
                 enforceFreshModel(lp, solver, modelBlocker);
             }
             log("");
@@ -275,19 +272,32 @@ public class LPModelEnumerator {
             int iterFound = 0;
             long tIterTotal = 0L;
 
-            // NEW semantics:
-            //   numModels == 0 => do NOT iterate at all.
-            //   numModels == -1 => iterate until UNSAT.
-            //   numModels  > 0 => stop when modelCount >= numModels.
+            // Determine stop condition
+            final int stopAtTotalModels; // inclusive upper bound on TOTAL models (initial + iterative)
+            if (numModels == 0) {
+                stopAtTotalModels = modelCount; // no iteration
+            } else if (numModels == -1) {
+                // cap by MAX_ITERATION ITERATIVE models (upper bound), i.e., total <= initial + MAX_ITERATION
+                stopAtTotalModels = numInitialModels + MAX_ITERATION;
+            } else if (numModels > 0) {
+                stopAtTotalModels = numModels;
+            } else {
+                // Weird negative other than -1: fall back to same cap behavior as -1
+                stopAtTotalModels = numInitialModels + MAX_ITERATION;
+            }
+
             if (numModels == 0) {
                 log("Skipping iterative phase (numModels=0 => only initial set).");
             } else {
-                // keep your old safety cap if you want for weird negative values other than -1
-                if (numModels < -1) numModels = MAX_ITERATION;
-
                 while (true) {
-                    if (numModels > 0 && modelCount >= numModels) {
-                        logf("Reached user limit of %d model(s).", numModels);
+                    // cap on TOTAL models
+                    if (modelCount >= stopAtTotalModels) {
+                        if (numModels == -1) {
+                            logf("Reached MAX_ITERATION cap: %d iterative model(s) (total models=%d).",
+                                    MAX_ITERATION, stopAtTotalModels);
+                        } else {
+                            logf("Reached user limit of %d total model(s).", stopAtTotalModels);
+                        }
                         break;
                     }
 
@@ -314,7 +324,7 @@ public class LPModelEnumerator {
                         logf("  diversity         : %d", diversity);
                     }
 
-                    // Build blocker for next iteration (and optionally print model)
+                    // Build blocker for next iteration
                     List<Long> blocker = new ArrayList<>(dbVars.size());
                     int trueCount = 0;
 
@@ -334,7 +344,6 @@ public class LPModelEnumerator {
                         log("");
                     }
 
-                    // Enforce freshness for next iterate
                     enforceFreshModel(lp, solver, blocker);
                 }
             }
@@ -352,21 +361,19 @@ public class LPModelEnumerator {
             log("ModelCount: " + modelCount);
 
             // ---- Optional extra analysis: rerun with varying numInitialModels ----
-            // IMPORTANT with new semantics:
-            //   These sub-runs should run ONLY initial models (no iterative), so set numModels=0.
+            // Sub-runs should do ONLY initial models (no iterative), so set numModels=0.
             if (extraAnalysis && modelCount > 1) {
                 boolean finished = true;
                 for (int i = 2; i <= Math.min(MAX_INITIAL, modelCount) && finished; i++) {
                     log("Running more analysis for " + i + " initial models (no iterative)...");
 
-                    // args = [downwardFile, outDir, numModels, numInitialModels, print, extraAnalysis]
                     String[] newArgs = Arrays.copyOf(args, Math.max(args.length, idx + 4));
                     newArgs[0] = downwardFile;
                     newArgs[1] = outDir;
                     newArgs[idx] = "0";          // numModels = 0 => ONLY initial set
                     newArgs[idx + 1] = "" + i;   // numInitialModels = i
-                    // keep print flag as-is
-                    newArgs[idx + 3] = "false";  // prevent recursive extraAnalysis explosion
+                    // keep print flag as-is (idx+2)
+                    newArgs[idx + 3] = "false";  // extraAnalysis=false to prevent recursion
 
                     List<String> cmdc = new ArrayList<>();
                     String javaBin = System.getProperty("java.home")
@@ -375,7 +382,7 @@ public class LPModelEnumerator {
                     cmdc.add(javaBin);
                     cmdc.add("-cp");
                     cmdc.add(System.getProperty("java.class.path"));
-                    cmdc.add("LPModelEnumerator"); // keep your original main-class name as-is
+                    cmdc.add("LPModelEnumerator");
 
                     cmdc.addAll(Arrays.asList(newArgs));
 
