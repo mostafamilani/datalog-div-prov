@@ -112,14 +112,19 @@ public class SATModelEnumerator {
     }
 
     public static void main(String[] args) {
-        // Updated CLI:
-        //   java org.datalog.SATModelEnumerator <downwardFile> <outDir> [numModels=0] [numInitialModels=2] [print=false] [extraAnalysis=false]
+        // Updated CLI semantics:
+        //   java org.datalog.SATModelEnumerator <downwardFile> <outDir> [numModels=-1] [numInitialModels=2] [print=false] [extraAnalysis=false]
+        //
+        // numModels semantics:
+        //   -1 : iterate until no more models (unbounded)
+        //    0 : DO NOT run iterative phase; only compute the initial set (numInitialModels)
+        //   >0 : total models desired (including initial); iterative continues until modelCount == numModels
         //
         // Notes:
         // - goal is auto-parsed from filename (as before)
         // - log file is written under <outDir>
         if (args.length < 2) {
-            System.err.println("Usage: java org.datalog.SATModelEnumerator <downwardFile> <outDir> [numModels=0] [numInitialModels=2] [print=false] [extraAnalysis=false]");
+            System.err.println("Usage: java org.datalog.SATModelEnumerator <downwardFile> <outDir> [numModels=-1] [numInitialModels=2] [print=false] [extraAnalysis=false]");
             System.exit(1);
         }
 
@@ -145,10 +150,17 @@ public class SATModelEnumerator {
 
         // Remaining optional args (start at index 2 now)
         int idx = 2;
-        int numModels              = (args.length > idx    && isInt(args[idx]))       ? Integer.parseInt(args[idx].trim())     : 0; // 0 = unlimited
-        final int numInitialModels = (args.length > idx+1  && isInt(args[idx+1]))     ? Integer.parseInt(args[idx+1].trim())   : 2;
-        final boolean printModels  = (args.length > idx+2) ? parseBool(args[idx+2], false) : false;
-        final boolean extraAnalysis= (args.length > idx+3) ? parseBool(args[idx+3], false) : false;
+
+        // DEFAULT numModels is now -1 (unbounded iterative), not 0.
+        int numModels =
+                (args.length > idx && isInt(args[idx])) ? Integer.parseInt(args[idx].trim()) : -1;
+
+        final int numInitialModels =
+                (args.length > idx+1 && isInt(args[idx+1])) ? Integer.parseInt(args[idx+1].trim()) : 2;
+        final boolean printModels  =
+                (args.length > idx+2) ? parseBool(args[idx+2], false) : false;
+        final boolean extraAnalysis=
+                (args.length > idx+3) ? parseBool(args[idx+3], false) : false;
 
         // ---- Build log file name (now inside outDir) ----
         String base = baseName(downwardFile);
@@ -185,20 +197,18 @@ public class SATModelEnumerator {
                         gpEcho.predicate, gpEcho.arg1, gpEcho.arg2);
             }
             logf("goal          : %s", goal);
-            logf("numModels     : %d (0 means unlimited)", numModels);
+            logf("numModels     : %d (-1=unbounded iterative, 0=only initial set)", numModels);
             logf("numInitial    : %d", numInitialModels);
             logf("print facts   : %s", printModels ? "true" : "false");
             log("----------------------------------------------------------------");
             System.out.println("Starting to create the solver");
+
             // ---- Build SAT encoding ----
             final long tBuildStart = now();
             DatalogSAT sat = new DatalogSAT();
             long handle     = sat.getSATEncodingWithNumSolverCopiesHandle(downwardFile, goal, numInitialModels);
-//            System.out.println("handle = " + handle);
             long solver     = sat.getSATEncodingSolverHandle(handle);
-//            System.out.println("solver = " + solver);
             long solverCopy = sat.getSATEncodingCopySolverHandle(handle);
-//            System.out.println("solverCopy = " + solverCopy);
             final long tBuildEnd = now();
 
             logf("Build time    : %d ms", dtMs(tBuildStart, tBuildEnd));
@@ -212,7 +222,6 @@ public class SATModelEnumerator {
 
             // ---- Initial models: add XOR constraints if >=2 copies ----
             if (numInitialModels >= 2) {
-//                log("Adding XOR constraints across initial copies...");
                 for (int i = 0; i < numInitialModels; i++) {
                     for (int j = i + 1; j < numInitialModels; j++) {
                         List<Long> auxVariables = new ArrayList<>(dbVars.size());
@@ -226,7 +235,6 @@ public class SATModelEnumerator {
                         }
                         // Hardly require at least one xor (copies differ somewhere)
                         sat.addSolverClause(solverCopy, auxVariables, 0);
-//                        logf("  XOR added between copies %d and %d.", i, j);
                     }
                 }
                 log("");
@@ -265,7 +273,6 @@ public class SATModelEnumerator {
                     long varBase = sat.getVariableNameInCopy(handle, baseVar, i);
                     boolean val  = sat.getSolverCurrentSolutionLiteralValue(solverCopy, varBase);
 
-                    // Blocker uses base (non-copy) variable. Assume map key is the base var id.
                     long baseVarId = baseVar;
 
                     if (val) {
@@ -288,55 +295,63 @@ public class SATModelEnumerator {
             int iterFound  = 0;
             long tIterTotal = 0L;
 
-            if (numModels < 0)
-                numModels = MAX_ITERATION;
-            while (true) {
-                if (modelCount >= numModels) {
-                    logf("Reached user limit of %d model(s).", numModels);
-                    break;
-                }
+            // NEW semantics:
+            //   numModels == 0 => do NOT iterate at all.
+            //   numModels == -1 => iterate until UNSAT.
+            //   numModels  > 0 => stop when modelCount >= numModels.
+            if (numModels == 0) {
+                log("Skipping iterative phase (numModels=0 => only initial set).");
+            } else {
+                if (numModels < -1) numModels = MAX_ITERATION;
 
-                final long tPerStart = now();
-                boolean satMore = sat.solve(solver);
-                final long tPerEnd = now();
-                final long perMs = dtMs(tPerStart, tPerEnd);
-
-                if (!satMore) {
-                    log("No more explanations exist.");
-                    break;
-                }
-
-                long mDiversity = sat.getSolverCurrentSolutionCost(solver);
-                modelCount++;
-                iterFound++;
-                tIterTotal += perMs;
-                diversity += mDiversity;
-
-                if (printModels) {
-                    logf("-- Iterative Model #%d --", modelCount - 1);
-                    logf("  time     : %d ms", perMs);
-                    logf("  marginal diversity: %d", mDiversity);
-                    logf("  diversity: %d", diversity);
-                }
-
-                // Build blocker and (optionally) print true variables
-                List<Long> blocker = new ArrayList<>(dbVars.size());
-                int trueCount = 0;
-                for (Long baseVar : dbVars) {
-                    boolean val = sat.getSolverCurrentSolutionLiteralValue(solver, baseVar);
-                    if (val) {
-                        if (printModels) logf("  %s = true", dbVarMap.get(baseVar));
-                        trueCount++;
-                        blocker.add(-baseVar);
-                    } else {
-                        blocker.add(baseVar);
+                while (true) {
+                    if (numModels > 0 && modelCount >= numModels) {
+                        logf("Reached user limit of %d model(s).", numModels);
+                        break;
                     }
-                }
-                if (printModels) logf("  (#true vars: %d)", trueCount);
-                if (printModels) log("");
 
-                // Enforce freshness for next iterate
-                enforceFreshModel(sat, solver, blocker);
+                    final long tPerStart = now();
+                    boolean satMore = sat.solve(solver);
+                    final long tPerEnd = now();
+                    final long perMs = dtMs(tPerStart, tPerEnd);
+
+                    if (!satMore) {
+                        log("No more explanations exist.");
+                        break;
+                    }
+
+                    long mDiversity = sat.getSolverCurrentSolutionCost(solver);
+                    modelCount++;
+                    iterFound++;
+                    tIterTotal += perMs;
+                    diversity += mDiversity;
+
+                    if (printModels) {
+                        logf("-- Iterative Model #%d --", modelCount - 1);
+                        logf("  time     : %d ms", perMs);
+                        logf("  marginal diversity: %d", mDiversity);
+                        logf("  diversity: %d", diversity);
+                    }
+
+                    // Build blocker and (optionally) print true variables
+                    List<Long> blocker = new ArrayList<>(dbVars.size());
+                    int trueCount = 0;
+                    for (Long baseVar : dbVars) {
+                        boolean val = sat.getSolverCurrentSolutionLiteralValue(solver, baseVar);
+                        if (val) {
+                            if (printModels) logf("  %s = true", dbVarMap.get(baseVar));
+                            trueCount++;
+                            blocker.add(-baseVar);
+                        } else {
+                            blocker.add(baseVar);
+                        }
+                    }
+                    if (printModels) logf("  (#true vars: %d)", trueCount);
+                    if (printModels) log("");
+
+                    // Enforce freshness for next iterate
+                    enforceFreshModel(sat, solver, blocker);
+                }
             }
 
             // ---- Summary & cleanup ----
@@ -349,15 +364,22 @@ public class SATModelEnumerator {
             sat.freeSATEncoding(handle);
             log("ExtraAnalysis: " + extraAnalysis);
             log("ModelCount: " + modelCount);
+
+            // IMPORTANT with new semantics:
+            // Extra-analysis sub-runs should be ONLY initial models (no iterative), so set numModels=0.
             if (extraAnalysis && modelCount > 1) {
                 boolean finished = true;
                 for (int i = 2; i <= Math.min(MAX_INITIAL, modelCount) & finished; i++) {
-                    log("Running more analysis for " + i + " models...");
+                    log("Running more analysis for " + i + " initial models (no iterative)...");
 
-                    // keep same arg length; just adjust numModels/numInitialModels
-                    String[] newArgs = Arrays.copyOf(args, args.length);
-                    newArgs[idx] = "0";        // numModels
-                    newArgs[idx+1] = "" + i;   // numInitialModels
+                    // Ensure we have enough args slots (downwardFile,outDir,numModels,numInitial,print,extra)
+                    String[] newArgs = Arrays.copyOf(args, Math.max(args.length, idx + 4));
+                    newArgs[0] = downwardFile;
+                    newArgs[1] = outDir;
+                    newArgs[idx]   = "0";        // numModels = 0 => only initial set
+                    newArgs[idx+1] = "" + i;     // numInitialModels
+                    // keep print flag as-is
+                    newArgs[idx+3] = "false";    // avoid recursive extraAnalysis
 
                     List<String> cmdc = new ArrayList<>();
                     String javaBin = System.getProperty("java.home")
@@ -388,7 +410,6 @@ public class SATModelEnumerator {
 
                         // Kill the process itself
                         p.destroyForcibly();
-
                         exitCode = 124; // timeout
                     } else {
                         exitCode = p.exitValue();
@@ -399,6 +420,7 @@ public class SATModelEnumerator {
                     }
                 }
             }
+
             log("Exit!");
         } catch (FileNotFoundException e) {
             e.printStackTrace();

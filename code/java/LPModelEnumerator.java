@@ -96,10 +96,16 @@ public class LPModelEnumerator {
     }
 
     public static void main(String[] args) {
-        // Updated CLI (matches SATModelEnumerator changes):
-        //   java LPModelEnumerator <downwardFile> <outDir> [numModels=0] [numInitialModels=2] [print=false] [extraAnalysis=false]
+        // Updated CLI semantics:
+        //   java LPModelEnumerator <downwardFile> <outDir> [numModels=-1] [numInitialModels=2] [print=false] [extraAnalysis=false]
+        //
+        // numModels semantics:
+        //   -1 : iterate until no more models (unbounded)
+        //    0 : DO NOT run iterative phase; only compute the initial set (numInitialModels)
+        //   >0 : total models desired (including initial); iterative continues until modelCount == numModels
+
         if (args.length < 2) {
-            System.err.println("Usage: java LPModelEnumerator <downwardFile> <outDir> [numModels=0] [numInitialModels=2] [print=false] [extraAnalysis=false]");
+            System.err.println("Usage: java LPModelEnumerator <downwardFile> <outDir> [numModels=-1] [numInitialModels=2] [print=false] [extraAnalysis=false]");
             System.exit(1);
         }
 
@@ -123,9 +129,13 @@ public class LPModelEnumerator {
         String goal = FileNameParser.goalFromFilename(downwardFile);
 
         int idx = 2; // optional args start here now
-        int numModels = (args.length > idx && isInt(args[idx])) ? Integer.parseInt(args[idx].trim()) : 0; // 0 = unlimited
-        final int numInitialModels = (args.length > idx + 1 && isInt(args[idx + 1])) ? Integer.parseInt(args[idx + 1].trim()) : 2;
-        final boolean printModels = (args.length > idx + 2) ? parseBool(args[idx + 2], false) : false;
+
+        // DEFAULT numModels is now -1 (unbounded iterative), not 0.
+        int numModels = (args.length > idx && isInt(args[idx])) ? Integer.parseInt(args[idx].trim()) : -1;
+
+        final int numInitialModels =
+                (args.length > idx + 1 && isInt(args[idx + 1])) ? Integer.parseInt(args[idx + 1].trim()) : 2;
+        final boolean printModels  = (args.length > idx + 2) ? parseBool(args[idx + 2], false) : false;
         final boolean extraAnalysis = (args.length > idx + 3) ? parseBool(args[idx + 3], false) : false;
 
         // ---- Log file name includes numModels and numInitialModels (now under outDir) ----
@@ -162,7 +172,7 @@ public class LPModelEnumerator {
             }
 
             logf("goal          : %s", goal);
-            logf("numModels     : %d (0 means unlimited)", numModels);
+            logf("numModels     : %d (-1=unbounded iterative, 0=only initial set)", numModels);
             logf("numInitial    : %d", numInitialModels);
             logf("print facts   : %s", printModels ? "true" : "false");
             log("----------------------------------------------------------------");
@@ -265,59 +275,68 @@ public class LPModelEnumerator {
             int iterFound = 0;
             long tIterTotal = 0L;
 
-            if (numModels < 0) numModels = MAX_ITERATION;
+            // NEW semantics:
+            //   numModels == 0 => do NOT iterate at all.
+            //   numModels == -1 => iterate until UNSAT.
+            //   numModels  > 0 => stop when modelCount >= numModels.
+            if (numModels == 0) {
+                log("Skipping iterative phase (numModels=0 => only initial set).");
+            } else {
+                // keep your old safety cap if you want for weird negative values other than -1
+                if (numModels < -1) numModels = MAX_ITERATION;
 
-            while (true) {
-                if (numModels > 0 && modelCount >= numModels) {
-                    logf("Reached user limit of %d model(s).", numModels);
-                    break;
-                }
-
-                final long tPerStart = now();
-                boolean satMore = lp.solve(solver);
-                final long tPerEnd = now();
-                final long perMs = dtMs(tPerStart, tPerEnd);
-
-                if (!satMore) {
-                    log("No more explanations exist.");
-                    break;
-                }
-
-                long mDiversity = lp.getSolverCurrentSolutionCost(solver);
-                modelCount++;
-                iterFound++;
-                tIterTotal += perMs;
-                diversity += mDiversity;
-
-                if (printModels) {
-                    logf("-- Iterative Model #%d --", modelCount - 1);
-                    logf("  time              : %d ms", perMs);
-                    logf("  marginal diversity: %d", mDiversity);
-                    logf("  diversity         : %d", diversity);
-                }
-
-                // Build blocker for next iteration (and optionally print model)
-                List<Long> blocker = new ArrayList<>(dbVars.size());
-                int trueCount = 0;
-
-                for (Long baseVar : dbVars) {
-                    boolean val = lp.getSolverCurrentSolutionVariableValue(solver, baseVar);
-                    if (val) {
-                        if (printModels) logf("  %s = true", dbVarMap.get(baseVar));
-                        trueCount++;
-                        blocker.add(-baseVar);
-                    } else {
-                        blocker.add(baseVar);
+                while (true) {
+                    if (numModels > 0 && modelCount >= numModels) {
+                        logf("Reached user limit of %d model(s).", numModels);
+                        break;
                     }
-                }
 
-                if (printModels) {
-                    logf("  (#true vars: %d)", trueCount);
-                    log("");
-                }
+                    final long tPerStart = now();
+                    boolean satMore = lp.solve(solver);
+                    final long tPerEnd = now();
+                    final long perMs = dtMs(tPerStart, tPerEnd);
 
-                // Enforce freshness for next iterate
-                enforceFreshModel(lp, solver, blocker);
+                    if (!satMore) {
+                        log("No more explanations exist.");
+                        break;
+                    }
+
+                    long mDiversity = lp.getSolverCurrentSolutionCost(solver);
+                    modelCount++;
+                    iterFound++;
+                    tIterTotal += perMs;
+                    diversity += mDiversity;
+
+                    if (printModels) {
+                        logf("-- Iterative Model #%d --", modelCount - 1);
+                        logf("  time              : %d ms", perMs);
+                        logf("  marginal diversity: %d", mDiversity);
+                        logf("  diversity         : %d", diversity);
+                    }
+
+                    // Build blocker for next iteration (and optionally print model)
+                    List<Long> blocker = new ArrayList<>(dbVars.size());
+                    int trueCount = 0;
+
+                    for (Long baseVar : dbVars) {
+                        boolean val = lp.getSolverCurrentSolutionVariableValue(solver, baseVar);
+                        if (val) {
+                            if (printModels) logf("  %s = true", dbVarMap.get(baseVar));
+                            trueCount++;
+                            blocker.add(-baseVar);
+                        } else {
+                            blocker.add(baseVar);
+                        }
+                    }
+
+                    if (printModels) {
+                        logf("  (#true vars: %d)", trueCount);
+                        log("");
+                    }
+
+                    // Enforce freshness for next iterate
+                    enforceFreshModel(lp, solver, blocker);
+                }
             }
 
             // ---- Summary & cleanup ----
@@ -333,17 +352,21 @@ public class LPModelEnumerator {
             log("ModelCount: " + modelCount);
 
             // ---- Optional extra analysis: rerun with varying numInitialModels ----
+            // IMPORTANT with new semantics:
+            //   These sub-runs should run ONLY initial models (no iterative), so set numModels=0.
             if (extraAnalysis && modelCount > 1) {
                 boolean finished = true;
                 for (int i = 2; i <= Math.min(MAX_INITIAL, modelCount) && finished; i++) {
-                    log("Running more analysis for " + i + " models...");
+                    log("Running more analysis for " + i + " initial models (no iterative)...");
 
-                    // Keep same arg length; just adjust numModels/numInitialModels.
                     // args = [downwardFile, outDir, numModels, numInitialModels, print, extraAnalysis]
-                    String[] newArgs = Arrays.copyOf(args, args.length);
-//                    newArgs[idx] = "0";            // numModels unlimited in sub-run
-                    newArgs[idx] = "" + i;           // numModels unlimited in sub-run
-                    newArgs[idx + 1] = "" + i;     // numInitialModels = i
+                    String[] newArgs = Arrays.copyOf(args, Math.max(args.length, idx + 4));
+                    newArgs[0] = downwardFile;
+                    newArgs[1] = outDir;
+                    newArgs[idx] = "0";          // numModels = 0 => ONLY initial set
+                    newArgs[idx + 1] = "" + i;   // numInitialModels = i
+                    // keep print flag as-is
+                    newArgs[idx + 3] = "false";  // prevent recursive extraAnalysis explosion
 
                     List<String> cmdc = new ArrayList<>();
                     String javaBin = System.getProperty("java.home")
