@@ -9,9 +9,9 @@ import java.util.*;
 
 public class SATModelEnumerator {
 
-    private static final int MAX_INITIAL = 4;
+    private static final int MAX_INITIAL = 5;
     //    private static final int MAX_INITIAL = 3;
-    private static final int MAX_ITERATION = 5;
+    private static final int MAX_ITERATION = 10;
     //    private static final int MAX_ITERATION = 30;
     static final long PROCESS_TIME_OUT = 30;
     //    static final long PROCESS_TIME_OUT = 5;

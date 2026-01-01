@@ -8,8 +8,8 @@ import java.util.*;
 
 public class LPModelEnumerator {
 
-    private static final int MAX_INITIAL = 4;
-    private static final int MAX_ITERATION = 5;
+    private static final int MAX_INITIAL = 5;
+    private static final int MAX_ITERATION = 10;
     static final long PROCESS_TIME_OUT = 30; // minutes (used in extraAnalysis)
 
     // ========= Dual-output logger (stdout + file) =========
