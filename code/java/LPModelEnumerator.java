@@ -341,7 +341,8 @@ public class LPModelEnumerator {
                     // Keep same arg length; just adjust numModels/numInitialModels.
                     // args = [downwardFile, outDir, numModels, numInitialModels, print, extraAnalysis]
                     String[] newArgs = Arrays.copyOf(args, args.length);
-                    newArgs[idx] = "0";            // numModels unlimited in sub-run
+//                    newArgs[idx] = "0";            // numModels unlimited in sub-run
+                    newArgs[idx] = "" + i;           // numModels unlimited in sub-run
                     newArgs[idx + 1] = "" + i;     // numInitialModels = i
 
                     List<String> cmdc = new ArrayList<>();
