@@ -1,1 +1,24 @@
+# Build outputs
+build/
+out/
+
+# Experiment-scale data and generated artifacts
 experiments/
+results/
+logs/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Runtime/log files
+*.log
+hs_err_pid*
+
+# Local licenses/secrets
+*.lic
+
+# OS/editor noise
+.DS_Store
+.vscode/
+

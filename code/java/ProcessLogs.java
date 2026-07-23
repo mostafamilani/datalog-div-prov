@@ -14,7 +14,12 @@ public class ProcessLogs {
     private static final Pattern RE_DOWNWARD_FILE = Pattern.compile("^downwardFile\\s*:\\s*(.+\\.lp)\\s*$", Pattern.MULTILINE);
     private static final Pattern RE_GOAL         = Pattern.compile("^goal\\s*:\\s*(.+)\\s*$", Pattern.MULTILINE);
     private static final Pattern RE_VARS         = Pattern.compile("^Number of variables\\s*:\\s*(\\d+)\\s*$", Pattern.MULTILINE);
+    private static final Pattern RE_CLAUSES      = Pattern.compile("^Number of clauses\\s*:\\s*(\\d+)\\s*$", Pattern.MULTILINE);
+    private static final Pattern RE_METRICS_ONLY = Pattern.compile("^metricsOnly\\s*:\\s*true\\s*$", Pattern.MULTILINE | Pattern.CASE_INSENSITIVE);
+    private static final Pattern RE_PROGRAM_CREATE_TIME = Pattern.compile("^Program creation time \\(variables\\+constraints\\)\\s*:\\s*(\\d+)\\s*ms\\s*$", Pattern.MULTILINE);
     private static final Pattern RE_INIT_TIME    = Pattern.compile("^Initial phase time\\s*:\\s*(\\d+)\\s*ms\\s*$", Pattern.MULTILINE);
+    private static final Pattern RE_PROGRAM_CREATE_TIME_SO_FAR = Pattern.compile("^Program creation time so far \\(incomplete\\)\\s*:\\s*(\\d+)\\s*ms\\s*$", Pattern.MULTILINE);
+    private static final Pattern RE_BUILD_TIME   = Pattern.compile("^Build time\\s*:\\s*(\\d+)\\s*ms\\s*$", Pattern.MULTILINE);
     private static final Pattern RE_INIT_DIV     = Pattern.compile("^Initial diversity\\s*:\\s*(\\d+)\\s*$", Pattern.MULTILINE);
     private static final Pattern RE_NUM_INITIAL  = Pattern.compile("^numInitial\\s*:\\s*(\\d+)\\s*$", Pattern.MULTILINE);
 
@@ -153,7 +158,16 @@ public class ProcessLogs {
         String goal = group1OrEmpty(RE_GOAL, txt);
 
         Integer nvars = group1OrNullInt(RE_VARS, txt);
+        Integer nclauses = group1OrNullInt(RE_CLAUSES, txt);
+        boolean metricsOnly = RE_METRICS_ONLY.matcher(txt).find();
         int initTime = group1OrZeroInt(RE_INIT_TIME, txt);
+        Integer programCreateTime = group1OrNullInt(RE_PROGRAM_CREATE_TIME, txt);
+        if (programCreateTime == null) {
+            programCreateTime = group1OrNullInt(RE_PROGRAM_CREATE_TIME_SO_FAR, txt);
+        }
+        if (programCreateTime == null) {
+            programCreateTime = group1OrNullInt(RE_BUILD_TIME, txt);
+        }
 
         Integer initDiv = group1OrNullInt(RE_INIT_DIV, txt);
         int k0 = group1OrNullInt(RE_NUM_INITIAL, txt) != null ? group1OrNullInt(RE_NUM_INITIAL, txt) : 1;
@@ -182,8 +196,11 @@ public class ProcessLogs {
                 row.put("goal", goal);
                 row.put("k", String.valueOf(k0));
                 row.put("vars", (nvars == null) ? "" : String.valueOf(nvars));
+                row.put("clauses", (nclauses == null) ? "" : String.valueOf(nclauses));
+                row.put("metrics_only", metricsOnly ? "true" : "false");
                 row.put("diversity", String.valueOf(initDiv));
                 row.put("time_ms", String.valueOf(cumulativeTime));
+                row.put("program_creation_time_ms", (programCreateTime == null) ? "" : String.valueOf(programCreateTime));
                 row.put("mode", mode);
                 row.put("log_file", p.toString());
                 rows.add(row);
@@ -224,8 +241,11 @@ public class ProcessLogs {
                 row.put("goal", goal);
                 row.put("k", String.valueOf(k));
                 row.put("vars", (nvars == null) ? "" : String.valueOf(nvars));
+                row.put("clauses", (nclauses == null) ? "" : String.valueOf(nclauses));
+                row.put("metrics_only", metricsOnly ? "true" : "false");
                 row.put("diversity", (dLogged == null) ? "" : String.valueOf(dLogged));
                 row.put("time_ms", String.valueOf(cumulativeTime));
+                row.put("program_creation_time_ms", (programCreateTime == null) ? "" : String.valueOf(programCreateTime));
                 row.put("mode", mode);
                 row.put("log_file", p.toString());
                 rows.add(row);
@@ -271,8 +291,11 @@ public class ProcessLogs {
             row.put("goal", goal);
             row.put("k", String.valueOf(k0));
             row.put("vars", (nvars == null) ? "" : String.valueOf(nvars));
+                row.put("clauses", (nclauses == null) ? "" : String.valueOf(nclauses));
+                row.put("metrics_only", metricsOnly ? "true" : "false");
             row.put("diversity", (initDiv == null) ? "" : String.valueOf(initDiv));
             row.put("time_ms", String.valueOf(initTime));
+            row.put("program_creation_time_ms", (programCreateTime == null) ? "" : String.valueOf(programCreateTime));
             row.put("mode", mode);
             row.put("log_file", p.toString());
             rows.add(row);
@@ -299,7 +322,7 @@ public class ProcessLogs {
         }
 
         List<String> fieldnames = new ArrayList<>(Arrays.asList(
-                "dataset", "lp_file", "goal", "k", "vars", "diversity", "time_ms", "mode", "log_file"
+            "dataset", "lp_file", "goal", "k", "vars", "clauses", "metrics_only", "diversity", "time_ms", "program_creation_time_ms", "mode", "log_file"
         ));
         if (anyError) fieldnames.add("error");
 
@@ -353,8 +376,11 @@ public class ProcessLogs {
                             errRow.put("goal", "");
                             errRow.put("k", "");
                             errRow.put("vars", "");
+                            errRow.put("clauses", "");
+                            errRow.put("metrics_only", "");
                             errRow.put("diversity", "");
                             errRow.put("time_ms", "");
+                            errRow.put("program_creation_time_ms", "");
                             errRow.put("mode", "");
                             errRow.put("log_file", logPath.toString());
                             errRow.put("error", e.getClass().getSimpleName() + ": " + e.getMessage());

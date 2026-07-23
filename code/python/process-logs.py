@@ -1,18 +1,24 @@
+# -*- coding: utf-8 -*-
 # process-logs.py
 from pathlib import Path
 import re
 import csv
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 
 # --------- regex patterns (top-level fields) ---------
 RE_DOWNWARD_FILE = re.compile(r"^downwardFile\s*:\s*(.+\.lp)\s*$", re.MULTILINE)
 RE_GOAL         = re.compile(r"^goal\s*:\s*(.+)\s*$", re.MULTILINE)
 RE_VARS         = re.compile(r"^Number of variables\s*:\s*(\d+)\s*$", re.MULTILINE)
+RE_CLAUSES      = re.compile(r"^Number of clauses\s*:\s*(\d+)\s*$", re.MULTILINE)
+RE_METRICS_ONLY = re.compile(r"^metricsOnly\s*:\s*true\s*$", re.MULTILINE | re.IGNORECASE)
 RE_INIT_TIME    = re.compile(r"^Initial phase time\s*:\s*(\d+)\s*ms\s*$", re.MULTILINE)
+RE_PROGRAM_CREATE_TIME = re.compile(r"^Program creation time \(variables\+constraints\)\s*:\s*(\d+)\s*ms\s*$", re.MULTILINE)
+RE_PROGRAM_CREATE_TIME_SO_FAR = re.compile(r"^Program creation time so far \(incomplete\)\s*:\s*(\d+)\s*ms\s*$", re.MULTILINE)
+RE_BUILD_TIME   = re.compile(r"^Build time\s*:\s*(\d+)\s*ms\s*$", re.MULTILINE)
 RE_INIT_DIV     = re.compile(r"^Initial diversity\s*:\s*(\d+)\s*$", re.MULTILINE)
 RE_NUM_INITIAL  = re.compile(r"^numInitial\s*:\s*(\d+)\s*$", re.MULTILINE)
 
-# Model blocks (Initial/Iterative) — robust to CRLF, extra lines, etc.
+# Model blocks (Initial/Iterative) � robust to CRLF, extra lines, etc.
 RE_MODEL_BLOCK = re.compile(
     r"--\s*(?P<kind>Initial|Iterative)\s+Model\s+#(?P<idx>\d+)\s*--\s*"
     r"(?P<body>.*?)(?=^\s*--\s*(?:Initial|Iterative)\s+Model\s+#|\Z)",
@@ -24,6 +30,7 @@ RE_TRUE_LINE = re.compile(r"^\s*(?P<atom>.+?)\s*=\s*true\s*$", re.MULTILINE)
 RE_TIME_LINE = re.compile(r"^\s*time\s*:\s*(\d+)\s*ms\s*$", re.MULTILINE)
 RE_DIV_LINE  = re.compile(r"^\s*diversity\s*:\s*(\d+)\s*$", re.MULTILINE)
 
+
 def extract_dataset_from_path(lp_path: str) -> Optional[str]:
     parts = Path(lp_path).parts
     if "downward" in parts:
@@ -31,8 +38,10 @@ def extract_dataset_from_path(lp_path: str) -> Optional[str]:
         return parts[i + 1] if i + 1 < len(parts) else None
     return None
 
+
 def symdiff_size(a: set, b: set) -> int:
     return len(a.symmetric_difference(b))
+
 
 def pairwise_symdiff_sum(sets: List[set]) -> int:
     total = 0
@@ -40,6 +49,7 @@ def pairwise_symdiff_sum(sets: List[set]) -> int:
         for j in range(i + 1, len(sets)):
             total += symdiff_size(sets[i], sets[j])
     return total
+
 
 def parse_model_blocks_with_atoms(txt: str):
     """
@@ -79,6 +89,7 @@ def parse_model_blocks_with_atoms(txt: str):
 
     return init_sets, iter_sets, iter_time, iter_div
 
+
 def parse_log_file(p: Path, check_diversity: bool) -> List[Dict[str, str]]:
     txt = p.read_text(encoding="utf-8", errors="ignore")
     rows: List[Dict[str, str]] = []
@@ -86,7 +97,12 @@ def parse_log_file(p: Path, check_diversity: bool) -> List[Dict[str, str]]:
     m_lp = RE_DOWNWARD_FILE.search(txt)
     m_goal = RE_GOAL.search(txt)
     m_vars = RE_VARS.search(txt)
+    m_clauses = RE_CLAUSES.search(txt)
+    metrics_only = bool(RE_METRICS_ONLY.search(txt))
     m_init_time = RE_INIT_TIME.search(txt)
+    m_program_create_time = RE_PROGRAM_CREATE_TIME.search(txt)
+    m_program_create_time_so_far = RE_PROGRAM_CREATE_TIME_SO_FAR.search(txt)
+    m_build_time = RE_BUILD_TIME.search(txt)
     m_init_div = RE_INIT_DIV.search(txt)
     m_num_initial = RE_NUM_INITIAL.search(txt)
 
@@ -94,13 +110,22 @@ def parse_log_file(p: Path, check_diversity: bool) -> List[Dict[str, str]]:
     dataset = extract_dataset_from_path(lp) or ""
     goal = m_goal.group(1).strip() if m_goal else ""
     nvars = int(m_vars.group(1)) if m_vars else None
+    nclauses = int(m_clauses.group(1)) if m_clauses else None
     init_time = int(m_init_time.group(1)) if m_init_time else 0
+    program_create_time = (
+        int(m_program_create_time.group(1)) if m_program_create_time
+        else (int(m_program_create_time_so_far.group(1)) if m_program_create_time_so_far
+        else (int(m_build_time.group(1)) if m_build_time else None)
+        )
+    )
     init_div = int(m_init_div.group(1)) if m_init_div else None
     k0 = int(m_num_initial.group(1)) if m_num_initial else 1
 
     # Parse all blocks once
     init_sets, iter_sets_atoms, iter_time_map, iter_div_map = parse_model_blocks_with_atoms(txt)
     iter_indices = sorted(iter_sets_atoms.keys() | iter_time_map.keys() | iter_div_map.keys())
+
+    mismatch_count = 0  # only used when check_diversity is True
 
     if iter_indices:
         # ========= GREEDY: initial row + one per iterative model =========
@@ -114,22 +139,30 @@ def parse_log_file(p: Path, check_diversity: bool) -> List[Dict[str, str]]:
                 "goal": goal,
                 "k": str(k0),
                 "vars": str(nvars) if nvars is not None else "",
+                "clauses": str(nclauses) if nclauses is not None else "",
+                "metrics_only": "true" if metrics_only else "false",
                 "diversity": str(init_div),
                 "time_ms": str(cumulative_time),
+                "program_creation_time_ms": str(program_create_time) if program_create_time is not None else "",
                 "mode": mode,
                 "log_file": str(p)
             })
 
         # Prepare diversity checking state
         if check_diversity:
-            # Validate initial cumulative vs logged Initial diversity
+            # Validate initial cumulative vs logged Initial diversity (print ONLY mismatch)
             if init_sets and len(init_sets) >= k0 and init_div is not None:
                 recomputed_init_cum = pairwise_symdiff_sum(init_sets[:k0])
                 if recomputed_init_cum != init_div:
+                    mismatch_count += 1
                     print(f"[DIVERSITY MISMATCH][initial] {p}")
-                    print(f"  expected cumulative={recomputed_init_cum}, logged initial_div={init_div}, k0={k0}")
+                    print(f"  expected_cumulative={recomputed_init_cum}, logged_initial_div={init_div}, k0={k0}")
+
             selected_sets = init_sets[:k0] if init_sets and len(init_sets) >= k0 else []
             cumulative_expected = pairwise_symdiff_sum(selected_sets) if selected_sets else 0
+        else:
+            selected_sets = []
+            cumulative_expected = 0
 
         # Emit rows per iterative model, in order
         k = k0
@@ -145,34 +178,33 @@ def parse_log_file(p: Path, check_diversity: bool) -> List[Dict[str, str]]:
                 "goal": goal,
                 "k": str(k),
                 "vars": str(nvars) if nvars is not None else "",
+                "clauses": str(nclauses) if nclauses is not None else "",
+                "metrics_only": "true" if metrics_only else "false",
                 "diversity": "" if d_logged is None else str(d_logged),
                 "time_ms": str(cumulative_time),
+                "program_creation_time_ms": str(program_create_time) if program_create_time is not None else "",
                 "mode": mode,
                 "log_file": str(p)
             })
 
-            # Optional consistency check
+            # Optional consistency check (print ONLY mismatches)
             if check_diversity:
                 current_atoms = iter_sets_atoms.get(idx)
                 if selected_sets and current_atoms is not None:
                     marginal_expected = sum(symdiff_size(current_atoms, s) for s in selected_sets)
                     cumulative_expected += marginal_expected
 
-                    if d_logged is None:
-                        print(f"[DIVERSITY INFO][iter {idx}] {p}")
-                        print(f"  marginal_expected={marginal_expected}, cumulative_expected={cumulative_expected} (no logged value)")
-                    elif d_logged == marginal_expected and d_logged != cumulative_expected:
-                        print(f"[OK as MARGINAL][iter {idx}] {p}")
-                        print(f"  logged={d_logged}, marginal={marginal_expected}, cumulative={cumulative_expected}")
-                    elif d_logged == cumulative_expected:
-                        print(f"[OK as CUMULATIVE][iter {idx}] {p}")
-                        print(f"  logged={d_logged}, cumulative={cumulative_expected}")
-                    else:
+                    # Only report if we have a logged value AND it matches neither marginal nor cumulative
+                    if d_logged is not None and (d_logged != marginal_expected and d_logged != cumulative_expected):
+                        mismatch_count += 1
                         print(f"[DIVERSITY MISMATCH][iter {idx}] {p}")
                         print(f"  logged={d_logged}, marginal_expected={marginal_expected}, cumulative_expected={cumulative_expected}")
 
                     selected_sets.append(current_atoms)
-                # else: cannot check (no atoms printed in this log)
+                # else: cannot check (no atoms printed or no selected sets); stay silent
+
+        if check_diversity and mismatch_count > 0:
+            print(f"[DIVERSITY SUMMARY] {p} mismatches={mismatch_count}")
 
     else:
         # ========= OPTIMAL / single-row logs =========
@@ -183,21 +215,25 @@ def parse_log_file(p: Path, check_diversity: bool) -> List[Dict[str, str]]:
             "goal": goal,
             "k": str(k0),
             "vars": str(nvars) if nvars is not None else "",
+                "clauses": str(nclauses) if nclauses is not None else "",
+                "metrics_only": "true" if metrics_only else "false",
             "diversity": str(init_div) if init_div is not None else "",
             "time_ms": str(init_time),
+            "program_creation_time_ms": str(program_create_time) if program_create_time is not None else "",
             "mode": mode,
             "log_file": str(p)
         })
 
-        # Optional initial-only check
+        # Optional initial-only check (print ONLY mismatch)
         if check_diversity:
             if init_sets and len(init_sets) >= k0 and init_div is not None:
                 recomputed_init_cum = pairwise_symdiff_sum(init_sets[:k0])
                 if recomputed_init_cum != init_div:
                     print(f"[DIVERSITY MISMATCH][initial-only] {p}")
-                    print(f"  expected cumulative={recomputed_init_cum}, logged initial_div={init_div}, k0={k0}")
+                    print(f"  expected_cumulative={recomputed_init_cum}, logged_initial_div={init_div}, k0={k0}")
 
     return rows
+
 
 def parse_logs_to_csv(root_dir: str, out_csv: str, check_diversity: bool = False) -> None:
     root = Path(root_dir)
@@ -214,14 +250,17 @@ def parse_logs_to_csv(root_dir: str, out_csv: str, check_diversity: bool = False
                 "goal": "",
                 "k": "",
                 "vars": "",
+                "clauses": "",
+                "metrics_only": "",
                 "diversity": "",
                 "time_ms": "",
+                "program_creation_time_ms": "",
                 "mode": "",
                 "log_file": str(log_path),
                 "error": f"{type(e).__name__}: {e}"
             })
 
-    fieldnames = ["dataset", "lp_file", "goal", "k", "vars", "diversity", "time_ms", "mode", "log_file"]
+    fieldnames = ["dataset", "lp_file", "goal", "k", "vars", "clauses", "metrics_only", "diversity", "time_ms", "program_creation_time_ms", "mode", "log_file"]
     if any("error" in r for r in all_rows):
         fieldnames.append("error")
 
@@ -235,6 +274,7 @@ def parse_logs_to_csv(root_dir: str, out_csv: str, check_diversity: bool = False
             w.writerow({k: r.get(k, "") for k in fieldnames})
 
     print("[done] CSV written.")
+
 
 if __name__ == "__main__":
     import sys
