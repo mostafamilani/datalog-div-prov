@@ -2,21 +2,22 @@
 set -euo pipefail
 
 # Usage:
-#   ./scripts/run_lp_single.sh <downward_file.lp> <out_dir> <config.properties> [proof] [ch] [metricsOnly]
+#   ./scripts/run_lp_single.sh <downward_file.lp> <out_dir> <config.properties> [k] [print] [proof] [mode]
 # Example:
-#   ./scripts/run_lp_single.sh /tmp/q.lp out/single config/runner.properties dag unambiguous false
+#   ./scripts/run_lp_single.sh /tmp/q.lp out/single config/runner.properties 1 true dag unambiguous
 
-if [[ $# -lt 3 || $# -gt 6 ]]; then
-  echo "Usage: $0 <downward_file.lp> <out_dir> <config.properties> [proof] [ch] [metricsOnly]"
+if [[ $# -lt 3 || $# -gt 7 ]]; then
+  echo "Usage: $0 <downward_file.lp> <out_dir> <config.properties> [k] [print] [proof] [mode]"
   exit 1
 fi
 
 DOWNWARD_FILE="$1"
 OUT_DIR="$2"
 CONFIG_FILE="$3"
-PROOF="${4:-dag}"
-CH="${5:-unambiguous}"
-METRICS_ONLY="${6:-false}"
+K="${4:-2}"
+PRINT="${5:-true}"
+PROOF="${6:-dag}"
+MODE="${7:-unambiguous}"
 
 if [[ ! -f "$DOWNWARD_FILE" ]]; then
   echo "Input file not found: $DOWNWARD_FILE"
@@ -45,16 +46,16 @@ CLASSPATH="build:code/lib/*:code/lib/Gralog/*:code/lib/Gralog/plugins/*"
 
 "$JAVAC_BIN" -cp "code/lib/*:code/lib/Gralog/*:code/lib/Gralog/plugins/*" -d build code/java/*.java
 
-LD_LIBRARY_PATH="code/lib:${LD_LIBRARY_PATH:-}" \
+LD_LIBRARY_PATH="code/lib:${JAVA_HOME}/lib:${JAVA_HOME}/lib/server:${LD_LIBRARY_PATH:-}" \
 "$JAVA_BIN" -Djava.library.path=code/lib -cp "$CLASSPATH" \
   LPModelEnumerator \
   "$DOWNWARD_FILE" \
   "$OUT_DIR" \
-  -1 \
-  2 \
-  true \
+  0 \
+  "$K" \
+  "$PRINT" \
   false \
   "$PROOF" \
-  "$CH" \
-  "$METRICS_ONLY" \
+  "$MODE" \
+  false \
   "$CONFIG_FILE"

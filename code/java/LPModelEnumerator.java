@@ -17,9 +17,9 @@ public class LPModelEnumerator {
     private static final int DEFAULT_MAX_ITERATION = 10; // number of ITERATIVE models when numModels == -1
     private static final long DEFAULT_PROCESS_TIME_OUT_MINUTES = 30;
 
-    // New defaults for (proof, ch) if nothing provided
-    private static final String DEFAULT_PROOF = "dag";              // dag | hypergraph | hypertree
-    private static final String DEFAULT_CH = "unambiguous";         // standard | unambiguous (accepts "unambigous")
+    // Defaults for simplified option surface.
+    private static final String DEFAULT_PROOF = "dag";              // dag | hypertree
+    private static final String DEFAULT_MODE = "unambiguous";       // arbitrary | unambiguous
 
     // ========= Dual-output logger (stdout + file) =========
     private static PrintWriter outWriter = null;
@@ -211,11 +211,10 @@ public class LPModelEnumerator {
     private static DatalogLP.Characterization parseProofCharacterization(String proof) {
         String p = norm(proof, DEFAULT_PROOF);
 
-        // Accept a few aliases
         if (p.equals("dag") || p.equals("proof_dag") || p.equals("proof-dag")) {
             return DatalogLP.Characterization.PROOF_DAG;
         }
-        if (p.equals("hypergraph") || p.equals("hypertree") || p.equals("hyper") || p.equals("hg")) {
+        if (p.equals("hypertree") || p.equals("hypergraph") || p.equals("hyper") || p.equals("hg")) {
             return DatalogLP.Characterization.HYPERGRAPH;
         }
 
@@ -223,14 +222,14 @@ public class LPModelEnumerator {
         return DatalogLP.Characterization.PROOF_DAG;
     }
 
-    private static DatalogLP.ProofTree parseProofTree(String ch) {
-        String c = norm(ch, DEFAULT_CH);
+    private static DatalogLP.ProofTree parseProofTree(String mode) {
+        String c = norm(mode, DEFAULT_MODE);
 
-        // Accept misspelling "unambigous"
+        // Accept misspelling "unambigous".
         if (c.equals("unambiguous") || c.equals("unambigous") || c.equals("ua")) {
             return DatalogLP.ProofTree.UNAMBIGUOUS;
         }
-        if (c.equals("standard") || c.equals("std")) {
+        if (c.equals("arbitrary") || c.equals("standard") || c.equals("std")) {
             return DatalogLP.ProofTree.STANDARD;
         }
 
@@ -239,12 +238,12 @@ public class LPModelEnumerator {
     }
 
     private static String proofToCliLabel(DatalogLP.Characterization ch) {
-        if (ch == DatalogLP.Characterization.HYPERGRAPH) return "hypergraph";
+        if (ch == DatalogLP.Characterization.HYPERGRAPH) return "hypertree";
         return "dag";
     }
 
     private static String treeToCliLabel(DatalogLP.ProofTree t) {
-        if (t == DatalogLP.ProofTree.STANDARD) return "standard";
+        if (t == DatalogLP.ProofTree.STANDARD) return "arbitrary";
         return "unambiguous";
     }
 
@@ -253,11 +252,11 @@ public class LPModelEnumerator {
          * CLI:
          *   java LPModelEnumerator <downwardFile> <outDir>
          *                          [numModels] [numInitialModels] [print] [extraAnalysis]
-         *                          [proof] [ch] [metricsOnly]
+         *                          [proof] [mode] [metricsOnly]
          *                          [configFile]
          *
-         * proof : dag | hypergraph | hypertree
-         * ch    : standard | unambiguous (also accepts "unambigous")
+         * proof : dag | hypertree
+         * mode  : arbitrary | unambiguous (also accepts "unambigous")
          * metricsOnly : true | false
          *
          * Defaults if omitted:
@@ -270,7 +269,7 @@ public class LPModelEnumerator {
          *   >0 : total models desired (including initial); stop when modelCount == numModels (or UNSAT earlier)
          */
         if (args.length < 2) {
-            System.err.println("Usage: java LPModelEnumerator <downwardFile> <outDir> [numModels] [numInitialModels] [print] [extraAnalysis] [proof] [ch] [metricsOnly] [configFile]");
+            System.err.println("Usage: java LPModelEnumerator <downwardFile> <outDir> [numModels] [numInitialModels] [print] [extraAnalysis] [proof] [mode] [metricsOnly] [configFile]");
             System.exit(1);
         }
 
@@ -302,14 +301,14 @@ public class LPModelEnumerator {
 
         // Defaults for CLI-visible params (config-driven)
         final int defaultNumModels = getInt(cfg, "defaults.numModels", -1);
-        final int defaultNumInitialModels = getInt(cfg, "defaults.numInitialModels", 2);
-        final boolean defaultPrintModels = getBool(cfg, "defaults.printModels", false);
+        final int defaultNumInitialModels = getInt(cfg, "defaults.k", getInt(cfg, "defaults.numInitialModels", 2));
+        final boolean defaultPrintModels = getBool(cfg, "defaults.print", getBool(cfg, "defaults.printModels", false));
         final boolean defaultExtraAnalysis = getBool(cfg, "defaults.extraAnalysis", false);
         final boolean defaultMetricsOnly = getBool(cfg, "defaults.metricsOnly", false);
 
-        // New defaults for proof/ch (config-driven)
+        // Defaults for proof/mode (config-driven).
         final String defaultProofStr = norm(getString(cfg, "defaults.proof", DEFAULT_PROOF), DEFAULT_PROOF);
-        final String defaultChStr    = norm(getString(cfg, "defaults.ch", DEFAULT_CH), DEFAULT_CH);
+        final String defaultModeStr  = norm(getString(cfg, "defaults.mode", getString(cfg, "defaults.ch", DEFAULT_MODE)), DEFAULT_MODE);
 
         // Determine how many args are "real" (exclude config if present)
         final int cliEndExclusive = args.length - (configFile != null ? 1 : 0);
@@ -324,13 +323,13 @@ public class LPModelEnumerator {
         final boolean printModels  = (cliEndExclusive > idx + 2) ? parseBool(args[idx + 2], defaultPrintModels) : defaultPrintModels;
         final boolean extraAnalysis = (cliEndExclusive > idx + 3) ? parseBool(args[idx + 3], defaultExtraAnalysis) : defaultExtraAnalysis;
 
-        // New: proof/ch as optional positional args
+        // proof/mode as optional positional args
         final String proofStr = (cliEndExclusive > idx + 4) ? norm(args[idx + 4], defaultProofStr) : defaultProofStr;
-        final String chStr    = (cliEndExclusive > idx + 5) ? norm(args[idx + 5], defaultChStr) : defaultChStr;
+        final String modeStr  = (cliEndExclusive > idx + 5) ? norm(args[idx + 5], defaultModeStr) : defaultModeStr;
         final boolean metricsOnly = (cliEndExclusive > idx + 6) ? parseBool(args[idx + 6], defaultMetricsOnly) : defaultMetricsOnly;
 
         final DatalogLP.Characterization characterization = parseProofCharacterization(proofStr);
-        final DatalogLP.ProofTree proofTree = parseProofTree(chStr);
+        final DatalogLP.ProofTree proofTree = parseProofTree(modeStr);
 
         // Ensure output directory exists
         File outDirFile = new File(outDir);
@@ -395,7 +394,7 @@ public class LPModelEnumerator {
             logf("numInitial    : %d", numInitialModels);
             logf("print facts   : %s", printModels ? "true" : "false");
             logf("proof         : %s", proofToCliLabel(characterization));
-            logf("ch            : %s", treeToCliLabel(proofTree));
+            logf("mode          : %s", treeToCliLabel(proofTree));
             logf("metricsOnly   : %s", metricsOnly ? "true" : "false");
             logf("MAX_INITIAL   : %d", MAX_INITIAL);
             logf("PROCESS_TO(min): %d", PROCESS_TIME_OUT);

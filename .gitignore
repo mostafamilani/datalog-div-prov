@@ -5,6 +5,8 @@ out/
 # Experiment-scale data and generated artifacts
 experiments/
 results/
+!results/
+!results/**
 logs/
 
 # Python caches
@@ -13,6 +15,7 @@ __pycache__/
 
 # Runtime/log files
 *.log
+!results/logs/*.log
 hs_err_pid*
 
 # Local licenses/secrets

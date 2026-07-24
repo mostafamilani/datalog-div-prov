@@ -1,4 +1,3 @@
-// BatchRunner.java
 import java.io.FileInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
@@ -6,94 +5,54 @@ import java.util.*;
 
 public class BatchRunner {
 
-    // Default (can be overridden by config)
     private static final long DEFAULT_PROCESS_TIME_OUT_MINUTES = 1000000;
 
     /**
-     * Usage:
-     *   java BatchRunner <inputFolder> <outputFolder> <mode:SAT|LP>
-     *                    [numModels] [numInitialModels] [print] [extraAnalysis]
-     *                    [proof] [ch] [metricsOnly]
+     * Simplified LP-only usage:
+     *   java BatchRunner <inputFolder> <outputFolder>
+     *                    [k] [print] [proof] [mode]
      *                    [configFile]
      *
-     * New params (only used for mode=LP):
-     *   proof : dag | hypergraph | hypertree
-     *           (maps to DatalogLP.Characterization.PROOF_DAG or HYPERGRAPH)
-     *   ch    : standard | unambiguous (also accepts "unambigous")
-     *           (maps to DatalogLP.ProofTree.STANDARD or UNAMBIGUOUS)
+     * Options:
+     *   proof : dag | hypertree
+     *   mode  : arbitrary | unambiguous
      *
-     * Defaults if omitted:
-     *   proof = dag
-     *   ch    = unambiguous
-     *
-     * Notes:
-     * - If configFile is omitted, defaults to: config/runner.properties
-     * - Per-dataset override:
-     *     datasetName = last path element of <inputFolder>
-     *     looks for sibling file: config/runner-<datasetName>.properties
-     *   Example:
-     *     inputFolder = .../experiments/downward/test
-     *     override    = config/runner-test.properties
+     * Defaults come from config/runner.properties (or the provided config file).
      */
     public static void main(String[] args) {
-        if (args.length < 3) {
+        if (args.length < 2) {
             System.err.println(
-                    "Usage: java BatchRunner <inputFolder> <outputFolder> <mode:SAT|LP> " +
-                            "[numModels] [numInitialModels] [print] [extraAnalysis] [proof] [ch] [metricsOnly] [configFile]"
+                    "Usage: java BatchRunner <inputFolder> <outputFolder> " +
+                    "[k] [print] [proof] [mode] [configFile]"
             );
             System.exit(1);
         }
 
-        final Path inputFolder  = Paths.get(args[0]).toAbsolutePath().normalize();
+        final Path inputFolder = Paths.get(args[0]).toAbsolutePath().normalize();
         final Path outputFolder = Paths.get(args[1]).toAbsolutePath().normalize();
-        final String modeRaw    = args[2];
 
-        final Mode mode = parseMode(modeRaw);
-
-        // ---- Detect optional configFile (last arg if .properties or exists) ----
-        String configFileArg = null;
-        if (args.length >= 4) {
+        String configFileArg = "config/runner.properties";
+        if (args.length >= 3) {
             String last = args[args.length - 1];
-            if (last != null && !last.isBlank()) {
-                java.io.File f = new java.io.File(last);
-                if (last.toLowerCase(Locale.ROOT).endsWith(".properties") || f.exists()) {
-                    configFileArg = last;
-                }
+            if (isConfigArg(last)) {
+                configFileArg = last;
             }
         }
-        if (configFileArg == null) configFileArg = "config/runner.properties";
 
-        // ---- Config loading (base + optional dataset override) ----
-        final String datasetName = inputFolder.getFileName().toString();
-        final Properties cfg = loadConfigWithDatasetOverride(configFileArg, datasetName);
-
-        // ---- Read defaults from config ----
-        int cfgNumModels = getInt(cfg, "defaults.numModels", -1);
-        int cfgNumInitialModels = getInt(cfg, "defaults.numInitialModels", 2);
-        boolean cfgPrint = getBool(cfg, "defaults.printModels", false);
-        boolean cfgExtra = getBool(cfg, "defaults.extraAnalysis", false);
-        boolean cfgMetricsOnly = getBool(cfg, "defaults.metricsOnly", false);
-
-        // New LP-only defaults (still parsed here so BatchRunner can forward)
-        String cfgProof = getString(cfg, "defaults.proof", "dag");
-        String cfgCh    = getString(cfg, "defaults.ch", "unambiguous");
-
-        long processTimeoutMinutes =
-                getLong(cfg, "batch.processTimeoutMinutes", DEFAULT_PROCESS_TIME_OUT_MINUTES);
-
-        // ---- CLI overrides (if provided) override config ----
-        // We parse positional args[3..] BUT exclude the configFile if present.
+        final Properties cfg = loadProps(configFileArg);
         final int cliEndExclusive = args.length - (isConfigArg(args[args.length - 1]) ? 1 : 0);
 
-        final int numModels        = (cliEndExclusive >= 4 ? parseIntArg(args[3], cfgNumModels) : cfgNumModels);
-        final int numInitialModels = (cliEndExclusive >= 5 ? parseIntArg(args[4], cfgNumInitialModels) : cfgNumInitialModels);
-        final boolean printModels  = (cliEndExclusive >= 6 ? parseBoolArg(args[5], cfgPrint) : cfgPrint);
-        final boolean extraAnalysis= (cliEndExclusive >= 7 ? parseBoolArg(args[6], cfgExtra) : cfgExtra);
+        final int cfgK = getInt(cfg, "defaults.k", getInt(cfg, "defaults.numInitialModels", 2));
+        final boolean cfgPrint = getBool(cfg, "defaults.print", getBool(cfg, "defaults.printModels", false));
+        final String cfgProof = getString(cfg, "defaults.proof", "dag");
+        final String cfgMode = getString(cfg, "defaults.mode", getString(cfg, "defaults.ch", "unambiguous"));
+        final long processTimeoutMinutes =
+                getLong(cfg, "batch.processTimeoutMinutes", DEFAULT_PROCESS_TIME_OUT_MINUTES);
 
-        // New LP-only CLI params
-        final String proofParam = (cliEndExclusive >= 8 ? safeLower(args[7], cfgProof) : cfgProof);
-        final String chParam    = (cliEndExclusive >= 9 ? safeLower(args[8], cfgCh) : cfgCh);
-        final boolean metricsOnly = (cliEndExclusive >= 10 ? parseBoolArg(args[9], cfgMetricsOnly) : cfgMetricsOnly);
+        final int k = (cliEndExclusive >= 3 ? parseIntArg(args[2], cfgK) : cfgK);
+        final boolean printModels = (cliEndExclusive >= 4 ? parseBoolArg(args[3], cfgPrint) : cfgPrint);
+        final String proofParam = (cliEndExclusive >= 5 ? canonicalProof(args[4]) : canonicalProof(cfgProof));
+        final String modeParam = (cliEndExclusive >= 6 ? canonicalMode(args[5]) : canonicalMode(cfgMode));
 
         if (!Files.isDirectory(inputFolder)) {
             System.err.println("Not a directory (inputFolder): " + inputFolder);
@@ -111,32 +70,18 @@ public class BatchRunner {
             System.exit(2);
         }
 
-        final String enumeratorClass =
-                (mode == Mode.SAT) ? "org.datalog.SATModelEnumerator" : "LPModelEnumerator";
-
         System.out.println("[BatchRunner] inputFolder   : " + inputFolder);
         System.out.println("[BatchRunner] outputFolder  : " + outputFolder);
-        System.out.println("[BatchRunner] datasetName   : " + datasetName);
-        System.out.println("[BatchRunner] mode          : " + mode + " (" + enumeratorClass + ")");
-        System.out.println("[BatchRunner] config(base)  : " + configFileArg);
-        System.out.println("[BatchRunner] config(eff)   : " + cfg.getProperty("__effective_config_file__", configFileArg));
-        System.out.println("[BatchRunner] numModels=" + numModels +
-                ", numInitialModels=" + numInitialModels +
-                ", print=" + printModels +
-                ", extraAnalysis=" + extraAnalysis +
-                ", metricsOnly=" + metricsOnly);
-
-        if (mode == Mode.LP) {
-            System.out.println("[BatchRunner] proof=" + proofParam + ", ch=" + chParam);
-        }
-
+        System.out.println("[BatchRunner] config        : " + configFileArg);
+        System.out.println("[BatchRunner] k=" + k + ", print=" + printModels + ", proof=" + proofParam + ", mode=" + modeParam);
         System.out.println("[BatchRunner] timeout(min)  : " + processTimeoutMinutes);
 
         Set<Object> seenKeys = new HashSet<>();
         Set<String> seenRealPaths = new HashSet<>();
 
         try (java.util.stream.Stream<Path> walk = Files.walk(inputFolder)) {
-            int processed = 0, skipped = 0;
+            int processed = 0;
+            int skipped = 0;
 
             Iterator<Path> it = walk.iterator();
             while (it.hasNext()) {
@@ -172,31 +117,19 @@ public class BatchRunner {
 
                     Files.createDirectories(outDirForThisFile);
 
-                    Path expectedLpLogPath = null;
-                    if (mode == Mode.LP) {
-                        String logName = buildLpLogName(real, numInitialModels, numModels, proofParam, chParam, metricsOnly);
-                        expectedLpLogPath = outDirForThisFile.resolve(logName);
-                    }
+                    Path expectedLpLogPath = outDirForThisFile.resolve(buildLpLogName(real, k, proofParam, modeParam));
 
-                    // Forward args to Enumerator:
-                    //   <downwardFile> <outDir> <numModels> <numInitialModels> <print> <extraAnalysis>
-                    //   [proof] [ch]    (LP only)
-                    //   <configFile>
                     List<String> forwarded = new ArrayList<>();
                     forwarded.add(real.toString());
                     forwarded.add(outDirForThisFile.toString());
-                    forwarded.add(String.valueOf(numModels));
-                    forwarded.add(String.valueOf(numInitialModels));
+                    forwarded.add("0"); // total models disabled, initial-only mode
+                    forwarded.add(String.valueOf(k));
                     forwarded.add(String.valueOf(printModels));
-                    forwarded.add(String.valueOf(extraAnalysis));
-
-                    if (mode == Mode.LP) {
-                        forwarded.add(proofParam);
-                        forwarded.add(chParam);
-                        forwarded.add(String.valueOf(metricsOnly));
-                    }
-
-                    forwarded.add(cfg.getProperty("__effective_config_file__", configFileArg));
+                    forwarded.add("false"); // extraAnalysis
+                    forwarded.add(proofParam);
+                    forwarded.add(modeParam);
+                    forwarded.add("false"); // metricsOnly
+                    forwarded.add(configFileArg);
 
                     try {
                         List<String> cmd = new ArrayList<>();
@@ -206,17 +139,14 @@ public class BatchRunner {
                         cmd.add(javaBin);
                         cmd.add("-cp");
                         cmd.add(System.getProperty("java.class.path"));
-                        cmd.add(enumeratorClass);
+                        cmd.add("LPModelEnumerator");
                         cmd.addAll(forwarded);
 
                         System.out.println("[CMD] " + String.join(" ", cmd));
                         System.out.println("[OUT] " + outDirForThisFile);
 
                         long procStartNs = System.nanoTime();
-
-                        Process p = new ProcessBuilder(cmd)
-                                .inheritIO()
-                                .start();
+                        Process p = new ProcessBuilder(cmd).inheritIO().start();
 
                         boolean finished = p.waitFor(processTimeoutMinutes, java.util.concurrent.TimeUnit.MINUTES);
 
@@ -236,13 +166,13 @@ public class BatchRunner {
                             p.waitFor();
                             exitCode = 124;
                             long elapsedMs = (System.nanoTime() - procStartNs) / 1_000_000L;
-                            System.err.println("[TIMEOUT] " + enumeratorClass + " exceeded " + processTimeoutMinutes
+                            System.err.println("[TIMEOUT] LPModelEnumerator exceeded " + processTimeoutMinutes
                                     + " min for file " + real.getFileName() + " (elapsed=" + elapsedMs + " ms)");
-                                if (rssKb != null || hwmKb != null) {
+                            if (rssKb != null || hwmKb != null) {
                                 System.err.println("[TIMEOUT] child_pid=" + childPid
-                                    + ", rss_mb=" + (rssKb == null ? "?" : (rssKb / 1024L))
-                                    + ", hwm_mb=" + (hwmKb == null ? "?" : (hwmKb / 1024L)));
-                                }
+                                        + ", rss_mb=" + (rssKb == null ? "?" : (rssKb / 1024L))
+                                        + ", hwm_mb=" + (hwmKb == null ? "?" : (hwmKb / 1024L)));
+                            }
                             appendRunnerDiagnostic(expectedLpLogPath, Arrays.asList(
                                     "----------------------------------------------------------------",
                                     "[RUNNER] status=TIMEOUT",
@@ -252,7 +182,6 @@ public class BatchRunner {
                                     "[RUNNER] child_pid=" + childPid,
                                     "[RUNNER] rss_mb=" + (rssKb == null ? "" : String.valueOf(rssKb / 1024L)),
                                     "[RUNNER] hwm_mb=" + (hwmKb == null ? "" : String.valueOf(hwmKb / 1024L)),
-                                    "[RUNNER] note=Child process was force-killed by BatchRunner; if program creation did not finish, timing is unavailable.",
                                     "================================================================"
                             ));
                         } else {
@@ -261,24 +190,20 @@ public class BatchRunner {
 
                         if (exitCode != 0) {
                             if (exitCode != 124) {
-                                String hint = (exitCode == 137 || exitCode == 9)
-                                        ? "likely killed externally/OOM"
-                                        : (exitCode == 134 ? "abort (native assert/terminate)" : "non-zero exit");
                                 appendRunnerDiagnostic(expectedLpLogPath, Arrays.asList(
                                         "----------------------------------------------------------------",
                                         "[RUNNER] status=NONZERO_EXIT",
                                         "[RUNNER] file=" + real,
                                         "[RUNNER] exit_code=" + exitCode,
-                                        "[RUNNER] hint=" + hint,
                                         "================================================================"
                                 ));
                             }
-                            throw new RuntimeException(enumeratorClass + " exited with code " + exitCode);
+                            throw new RuntimeException("LPModelEnumerator exited with code " + exitCode);
                         }
 
                         processed++;
                     } catch (Throwable t) {
-                        System.err.println("[ERROR] Failure running " + enumeratorClass + " for " + real.getFileName() + ": " + t.getMessage());
+                        System.err.println("[ERROR] Failure running LPModelEnumerator for " + real.getFileName() + ": " + t.getMessage());
                         t.printStackTrace(System.err);
                     }
                 } catch (java.io.IOException ioe) {
@@ -292,24 +217,6 @@ public class BatchRunner {
             System.err.println("[ERROR] Failed to walk folder: " + e.getMessage());
             System.exit(3);
         }
-    }
-
-    // ----- Mode + Helpers -----
-
-    private enum Mode { SAT, LP }
-
-    private static Mode parseMode(String s) {
-        if (s == null) {
-            System.err.println("Mode must be SAT or LP.");
-            System.exit(1);
-        }
-        String v = s.trim().toUpperCase(Locale.ROOT);
-        if (v.equals("SAT")) return Mode.SAT;
-        if (v.equals("LP")) return Mode.LP;
-
-        System.err.println("Invalid mode: " + s + " (expected SAT or LP)");
-        System.exit(1);
-        return Mode.SAT;
     }
 
     private static int parseIntArg(String s, int defVal) {
@@ -335,35 +242,33 @@ public class BatchRunner {
         return s.trim().toLowerCase(Locale.ROOT);
     }
 
+    private static String canonicalProof(String proofParam) {
+        String p = safeLower(proofParam, "dag");
+        if (p.equals("hypertree") || p.equals("hypergraph") || p.equals("hyper") || p.equals("hg")) {
+            return "hypertree";
+        }
+        return "dag";
+    }
+
+    private static String canonicalMode(String modeParam) {
+        String c = safeLower(modeParam, "unambiguous");
+        if (c.equals("arbitrary") || c.equals("standard") || c.equals("std")) return "arbitrary";
+        return "unambiguous";
+    }
+
     private static String baseNameNoExt(Path filePath) {
         String n = filePath.getFileName().toString();
         int dot = n.lastIndexOf('.');
         return (dot >= 0) ? n.substring(0, dot) : n;
     }
 
-    private static String canonicalProofLabel(String proofParam) {
-        String p = safeLower(proofParam, "dag");
-        if (p.equals("hypergraph") || p.equals("hypertree") || p.equals("hyper") || p.equals("hg")) {
-            return "hypergraph";
-        }
-        return "dag";
-    }
-
-    private static String canonicalChLabel(String chParam) {
-        String c = safeLower(chParam, "unambiguous");
-        if (c.equals("standard") || c.equals("std")) return "standard";
-        return "unambiguous";
-    }
-
-    private static String buildLpLogName(Path lpFile, int numInitialModels, int numModels, String proofParam, String chParam, boolean metricsOnly) {
+    private static String buildLpLogName(Path lpFile, int k, String proofParam, String modeParam) {
         return String.format(
-                "%s-initial-%d-total-%d-proof-%s-ch-%s%s.lp.log",
+                "%s-initial-%d-total-0-proof-%s-ch-%s.lp.log",
                 baseNameNoExt(lpFile),
-                numInitialModels,
-                numModels,
-                canonicalProofLabel(proofParam),
-                canonicalChLabel(chParam),
-                metricsOnly ? "-metrics-only" : ""
+                k,
+                canonicalProof(proofParam).equals("hypertree") ? "hypertree" : "dag",
+                canonicalMode(modeParam)
         );
     }
 
@@ -384,7 +289,6 @@ public class BatchRunner {
                 }
             }
         } catch (Throwable ignored) {
-            // best-effort diagnostics only
         }
     }
 
@@ -410,32 +314,8 @@ public class BatchRunner {
         try (FileInputStream fis = new FileInputStream(path)) {
             p.load(fis);
         } catch (Exception e) {
-            // silent: caller decides if missing is ok
         }
         return p;
-    }
-
-    private static Properties loadConfigWithDatasetOverride(String baseConfigPath, String datasetName) {
-        Properties base = loadProps(baseConfigPath);
-
-        // Derive: <dir>/runner-<dataset>.properties
-        Path basePath = Paths.get(baseConfigPath).toAbsolutePath().normalize();
-        Path dir = (basePath.getParent() == null ? Paths.get(".") : basePath.getParent());
-        String datasetOverrideName = "runner-" + datasetName + ".properties";
-        Path overridePath = dir.resolve(datasetOverrideName);
-
-        if (Files.isRegularFile(overridePath)) {
-            Properties override = loadProps(overridePath.toString());
-            // apply override on top of base
-            for (String k : override.stringPropertyNames()) {
-                base.setProperty(k, override.getProperty(k));
-            }
-            base.setProperty("__effective_config_file__", overridePath.toString());
-        } else {
-            base.setProperty("__effective_config_file__", baseConfigPath);
-        }
-
-        return base;
     }
 
     private static int getInt(Properties p, String key, int defVal) {
