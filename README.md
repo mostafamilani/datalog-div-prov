@@ -1,7 +1,5 @@
 # datalog-div-prov
 
-Repository for Datalog provenance and exact explanation enumeration.
-
 The repository accompanies the draft paper *Diverse Why-Provenance for
 Datalog Queries*. In addition to the implementation, it includes a compact
 [experimental-results artifact](results/README.md) with a raw solver log,
