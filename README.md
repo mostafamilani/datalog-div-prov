@@ -5,6 +5,19 @@ Datalog Queries*. In addition to the implementation, it includes a compact
 [experimental-results artifact](results/README.md) with a raw solver log,
 51,164 experiment measurements, plotting code, and representative figures.
 
+## Background: Datalog and Why-Provenance
+
+Datalog is a rule-based query language where new facts are inferred from
+existing facts by repeatedly applying logical rules until no new facts can be
+derived. In this setting, base input facts are often called extensional facts
+(EDB), while facts produced by rules are intensional facts (IDB).
+
+Why-provenance asks why a specific query answer is true. For Datalog, the
+answer is explained by identifying sets of EDB facts that can derive the goal
+through valid rule applications. Since the same answer may admit many such
+supports, this repository focuses on computing multiple exact explanations and
+comparing them under different structural assumptions.
+
 ## Technical Context
 
 ### Why Multiple Explanations Matter
