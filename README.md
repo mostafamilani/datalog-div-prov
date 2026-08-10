@@ -2,8 +2,7 @@
 
 The repository accompanies the draft paper *Diverse Why-Provenance for
 Datalog Queries*. In addition to the implementation, it includes a compact
-[experimental-results artifact](results/README.md) with a raw solver log,
-51,164 experiment measurements, plotting code, and representative figures.
+[experimental-results artifact](results/README.md).
 
 ## Background: Datalog and Why-Provenance
 
