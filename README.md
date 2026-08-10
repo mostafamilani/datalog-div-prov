@@ -1,268 +1,287 @@
-# datalog-div-prov
+# Diverse Why-Provenance for Datalog Queries: Implementation Artifact
 
 The repository accompanies the draft paper *Diverse Why-Provenance for
 Datalog Queries*. In addition to the implementation, it includes a compact
 [experimental-results artifact](results/README.md) with a raw solver log,
 51,164 experiment measurements, plotting code, and representative figures.
 
-## What Is Included
+## Technical Context
 
-- `code/java/`: Java batch runner, model enumeration, and related utilities.
-- `code/python/`: scripts for grounding, preprocessing, and log processing.
-- `code/c/`: native solver support code.
-- `code/lib/`: bundled runtime dependencies used by the Java code.
-- `config/`: single runner configuration file.
-- `scripts/`: helper scripts for common execution modes.
-- `examples/`: small downward-closure inputs for validating an installation.
-- `results/`: paper measurements, plotting scripts, figures, and a raw example
-  log; see the [results guide](results/README.md).
+### Why Multiple Explanations Matter
+
+For a Datalog answer, there is often more than one valid derivation. If we only return one explanation, we hide alternatives that may be simpler, more robust, or rely on different base facts. This repository is designed to compute several exact explanations and expose structural choices between them.
+
+### What a Proof Tree Means Here
+
+Intuitively, a proof tree is a derivation witness for one goal fact:
+
+- The root is the goal fact being explained.
+- Each internal node corresponds to one rule application producing that fact.
+- Children are the body facts needed by that rule instance.
+- Leaves are database facts (EDB facts).
+
+The explanation itself is the set of leaf database facts that support the root. Different trees can produce different supports, so explanation enumeration is fundamentally a search over proof trees.
+
+### Arbitrary vs Unambiguous Proof Trees
+
+This code supports two proof-tree families:
+
+- `mode=arbitrary`: allows all valid proof trees.
+- `mode=unambiguous`: enforces consistency in how repeated derived facts are justified.
+
+The unambiguous mode avoids mixing incompatible local derivation choices for the same intermediate fact inside one explanation. In practice, this yields explanations that are usually easier to read and reason about, while still preserving completeness of answer semantics.
+
+### Proof Structure Options: dag vs hypertree
+
+The `proof` option controls the internal encoding family used by the solver:
+
+- `proof=dag`: works with a DAG-style representation that can reuse shared sub-derivations.
+- `proof=hypertree`: works with a hypergraph-oriented representation of rule instantiations.
+
+Both target exact explanation computation, but they expose different structural views of the same derivation space and can behave differently in runtime and memory depending on how connected the downward closure is.
+
+### Why Downward Closure Exists
+
+Enumerating proof trees directly can explode combinatorially. The repository therefore relies on a compact intermediate object called the downward closure of a goal:
+
+- It is a rooted, finite representation of all rule instantiations reachable from the goal.
+- It compactly encodes the proof search space before optimization.
+- The Java solvers then select edge sets inside this structure that correspond to valid explanations under the selected proof/mode semantics.
+
+Operationally, the Python builder scripts generate this structure as `.lp` files (containing `dcedge(...)` facts). The Java runners consume those files to enumerate explanations.
+
+### End-to-End View
+
+1. Build a downward-closure file for a target goal.
+2. Choose proof structure (`PROOF=dag|hypertree`) and characterization mode (`MODE=unambiguous|arbitrary`).
+3. Run exact explanation enumeration for the first `K` solutions.
+4. Inspect generated logs and extracted supporting facts.
+
+## What This Repository Provides
+
+- Java implementation of exact explanation enumeration and batch execution.
+- Native SAT/MaxSAT/JNI components used by the Java layer.
+- Python scripts for preprocessing and downward-closure generation.
+- Checked-in, small downward examples for installation validation.
+- A compact experimental artifact in [results/README.md](results/README.md), including merged measurements and plotting scripts.
+
+Main directories:
+
+- `code/java/`: runners and model enumerators.
+- `code/c/`: native solver support.
+- `code/python/`: preprocessing and grounding helpers.
+- `config/`: default runtime configuration.
+- `scripts/`: convenience wrappers.
+- `examples/downward/`: small validation inputs.
+- `results/`: paper artifact snapshot.
 
 ## Requirements
 
 - Linux
 - Java 21
 - Python 3.10+
-- Native libraries required by the bundled solver components
-- Optional: Gurobi, if you use a mode that depends on it
+- Native libraries required by bundled solver components in `code/lib/`
+- Gurobi license if your selected run mode requires it
 
-## Basic Usage
+## Quick Start
 
-### Compile
+Compile Java sources:
 
 ```bash
 make compile
 ```
 
-### Run on a single downward-closure file
+Run one included example:
 
 ```bash
-./scripts/run_lp_single.sh <downward_file.lp> <out_dir> <config.properties> [k] [print] [proof] [mode]
+make run-single \
+  INPUT_FILE=examples/downward/graph_analytics/bitcoin_path_9005418_9005413.lp \
+  OUT_DIR=out/test-example \
+  K=1 \
+  PRINT=true \
+  PROOF=dag \
+  MODE=unambiguous \
+  CONFIG=config/runner.properties
 ```
 
-Example:
-
-```bash
-./scripts/run_lp_single.sh path/to/file.lp out/single config/runner.properties 1 true dag unambiguous
-```
-
-### Run on a folder of downward-closure files
-
-```bash
-make run-batch INPUT_DIR=path/to/downward OUTPUT_DIR=out/logs/LP K=2 PRINT=true PROOF=dag MODE=unambiguous CONFIG=config/runner.properties
-```
-
-### Generate downward-closure files
-
-```bash
-python3 code/python/build-downward-closure.py <scenario-name> <base-out-dir> [database-name]
-```
-
-## Example
-
-The repository includes a small verified sample input at:
-
-```text
-examples/downward/graph_analytics/bitcoin_path_9005418_9005413.lp
-```
-
-Its exact contents are:
-
-```prolog
-{dcedge(2,2,path,9005418,9005413,e,9005418,9005413,pnil,nil,nil)}
-```
-
-Run it with:
-
-```bash
-./scripts/run_lp_single.sh \
-	examples/downward/graph_analytics/bitcoin_path_9005418_9005413.lp \
-	out/test-example \
-	config/runner.properties \
-	1 \
-	true \
-	dag \
-	unambiguous
-```
-
-This creates the log file:
+Expected log file:
 
 ```text
 out/test-example/bitcoin_path_9005418_9005413-initial-1-total-0-proof-dag-ch-unambiguous.lp.log
 ```
 
-A successful run produces output like:
+## Running Explanations
 
-```text
-Number of variables : 4
-Number of clauses   : 6
-Number of acyclicity variables : 0
-Number of acyclicity clauses : 0
-Number of DB variables (facts) : 1
+### Option Semantics
 
-Build time    : 322 ms
-Program creation time (variables+constraints): 327 ms
+Canonical options for the simplified workflow are:
 
-Solving initial phase to find 1 explanation(s)...
-Initial phase time : 0 ms
-Initial diversity  : 0
--- Initial Model #0 --
-	e(9005418,9005413) = true
-	(#true vars: 1)
-End-to-end time        : 406 ms
-Exit!
-```
+- `PROOF`: `dag` or `hypertree`
+- `MODE`: `unambiguous` or `arbitrary`
+- `K`: number of initial explanations to compute
+- `PRINT`: `true`/`false`, prints model facts in logs
 
-## Validated Configurations
+Defaults come from [config/runner.properties](config/runner.properties):
 
-The following commands were validated on 2026-07-23 using the simplified option surface.
+- `defaults.k=2`
+- `defaults.print=true`
+- `defaults.proof=dag`
+- `defaults.mode=unambiguous`
 
-### 1) Single-file, dag + unambiguous
+### Run a Single Downward File
+
+Using Make:
 
 ```bash
 make run-single \
-	INPUT_FILE=examples/downward/graph_analytics/bitcoin_path_9005418_9005413.lp \
-	OUT_DIR=out/readme-validate/dag-unambig \
-	K=1 \
-	PRINT=true \
-	PROOF=dag \
-	MODE=unambiguous \
-	CONFIG=config/runner.properties
+  INPUT_FILE=path/to/file.lp \
+  OUT_DIR=out/single \
+  K=2 \
+  PRINT=true \
+  PROOF=dag \
+  MODE=unambiguous \
+  CONFIG=config/runner.properties
 ```
 
-Generated log:
-
-```text
-out/readme-validate/dag-unambig/bitcoin_path_9005418_9005413-initial-1-total-0-proof-dag-ch-unambiguous.lp.log
-```
-
-Excerpt:
-
-```text
-RUN @ 2026-07-23T20:53:15.473737003-04:00
-goal          : path(9005418,9005413)
-numInitial    : 1
-proof         : dag
-mode          : unambiguous
-Initial phase time : 0 ms
--- Initial Model #0 --
-	e(9005418,9005413) = true
-	(#true vars: 1)
-End-to-end time        : 406 ms
-Exit!
-```
-
-### 2) Single-file, hypertree + arbitrary
+Using the shell wrapper:
 
 ```bash
-make run-single \
-	INPUT_FILE=examples/downward/graph_analytics/bitcoin_path_9005418_9005413.lp \
-	OUT_DIR=out/readme-validate/hypertree-arbitrary \
-	K=1 \
-	PRINT=true \
-	PROOF=hypertree \
-	MODE=arbitrary \
-	CONFIG=config/runner.properties
+./scripts/run_lp_single.sh <downward_file.lp> <out_dir> <config.properties> [k] [print] [proof] [mode]
 ```
 
-Generated log:
+Wrapper defaults:
 
-```text
-out/readme-validate/hypertree-arbitrary/bitcoin_path_9005418_9005413-initial-1-total-0-proof-hypertree-ch-arbitrary.lp.log
-```
+- `k=2`
+- `print=true`
+- `proof=dag`
+- `mode=unambiguous`
 
-Excerpt:
-
-```text
-RUN @ 2026-07-23T20:54:19.421888121-04:00
-goal          : path(9005418,9005413)
-numInitial    : 1
-proof         : hypertree
-mode          : arbitrary
-Initial phase time : 1 ms
--- Initial Model #0 --
-	e(9005418,9005413) = true
-	(#true vars: 1)
-End-to-end time        : 151 ms
-Exit!
-```
-
-### 3) Batch run over graph_analytics folder
+### Run a Batch of Downward Files
 
 ```bash
 make run-batch \
-	INPUT_DIR=examples/downward/graph_analytics \
-	OUTPUT_DIR=out/readme-validate/batch \
-	K=1 \
-	PRINT=true \
-	PROOF=dag \
-	MODE=unambiguous \
-	CONFIG=config/runner.properties
+  INPUT_DIR=path/to/downward \
+  OUTPUT_DIR=out/logs/LP \
+  K=2 \
+  PRINT=true \
+  PROOF=dag \
+  MODE=unambiguous \
+  CONFIG=config/runner.properties
 ```
 
-Generated log:
+`run-batch` recursively scans `INPUT_DIR` for `.lp` files and writes per-input logs under `OUTPUT_DIR`.
+
+### Advanced Direct Java Invocation (Optional)
+
+`LPModelEnumerator` supports a wider positional CLI:
 
 ```text
-out/readme-validate/batch/bitcoin_path_9005418_9005413-initial-1-total-0-proof-dag-ch-unambiguous.lp.log
+java LPModelEnumerator <downwardFile> <outDir> [numModels] [numInitialModels] [print] [extraAnalysis] [proof] [mode] [metricsOnly] [configFile]
 ```
 
-Excerpt:
+Important behavior of `numModels`:
+
+- `-1`: iterative enumeration until saturation (capped by config `lp.maxIteration`)
+- `0`: compute only initial explanations (`numInitialModels`)
+- `>0`: total target models (initial + iterative)
+
+The Make/shell simplified flow uses `numModels=0` (initial explanations only).
+
+## Downward-Closure Generation
+
+Downward-closure generation is implemented in `code/python/` and produces the `.lp` inputs consumed by the Java enumeration pipeline.
+
+At a high level, the generator:
+
+1. Reads a scenario program, database facts, and one query atom.
+2. Uses DLV rewriting (`--print-rewriting`) to focus grounding around the goal.
+3. Adds edge-construction rules that encode reachable derivation structure.
+4. Emits only downward-closure edge facts via a predicate filter (`dcedge/...`).
+
+The resulting file is a compact proof-search graph for one goal, not a final explanation by itself.
+
+### Scripts
+
+- `build-downward-closure.py`: original generator.
+- `build-downward-closure-namefix.py`: safer variant for query text and filenames (normalizes Unicode/smart quotes and slugifies output filenames).
+
+### Expected Input Layout
+
+Given `<base_out_dir>` and `<scenario>`:
 
 ```text
-RUN @ 2026-07-23T20:53:27.269116856-04:00
-goal          : path(9005418,9005413)
-numInitial    : 1
-proof         : dag
-mode          : unambiguous
-Initial phase time : 0 ms
--- Initial Model #0 --
-	e(9005418,9005413) = true
-	(#true vars: 1)
-End-to-end time        : 126 ms
-Exit!
+<base_out_dir>/datasets/<scenario>/program.lp
+<base_out_dir>/datasets/<scenario>/queries/*.txt
+<base_out_dir>/datasets/<scenario>/databases/*.facts
 ```
 
-## Configuration
+Query/database pairing is by filename stem:
 
-Main defaults live in `config/runner.properties`.
+- `queries/db1.txt` pairs with `databases/db1.facts`
 
-Useful settings include:
+Each query line in the `.txt` file is treated as a goal atom.
 
-- `defaults.k`
-- `defaults.print`
-- `batch.processTimeoutMinutes`
-- `lp.maxInitial`
-- `lp.maxIteration`
-- `lp.processTimeoutMinutes`
+### Run Commands
 
-## Canonical Options
+Generate for all query files in a scenario:
 
-The run flow uses only these options:
+```bash
+python3 code/python/build-downward-closure.py <scenario> <base_out_dir>
+```
 
-- `proof`: `dag` or `hypertree`
-- `mode`: `arbitrary` or `unambiguous`
-- `k`: number of initial explanations
-- `print`: print explanation facts (`true`/`false`)
+Generate for one database/query file stem only:
 
-## Output
+```bash
+python3 code/python/build-downward-closure.py <scenario> <base_out_dir> <database_stem>
+```
 
-The Java runners write logs and outputs into the output directory you choose. The exact filenames depend on the input file, selected proof mode, characterization mode, and timeout settings.
+Recommended robust variant:
 
-## Paper Results
+```bash
+python3 code/python/build-downward-closure-namefix.py <scenario> <base_out_dir> [database_stem]
+```
 
-The publication artifact is documented in
-[`results/README.md`](results/README.md). It includes a raw reproducible log,
-the merged CSV used by the paper plotting pipeline, Python dependencies and an
-exact plot-regeneration command, and representative exact-runtime,
-approximate-runtime, and approximation-quality figures.
+Outputs are written to:
 
-For example, see the
-[Facebook approximation-quality figure](results/figures/rate-graph_analytics-facebook-unambigous-dag.pdf).
+```text
+<base_out_dir>/downward/<scenario>/
+```
 
-The included snapshot supports inspection and plot regeneration. Re-running
-the complete benchmark suite additionally requires the benchmark databases and
-generated downward-closure inputs; the checked-in examples are intended for
-installation validation rather than full-paper reproduction.
+Timing rows are appended to:
+
+```text
+<base_out_dir>/times/ground_times.tsv
+```
+
+### Prerequisite for Grounding
+
+Both generators call a DLV2 binary at:
+
+```text
+code/python/bin/dlv2
+```
+
+Ensure this binary exists and is executable, otherwise generation fails with `FileNotFoundError` for `.../code/python/bin/dlv2`.
+
+## Validated Commands in This Repository State
+
+Validated on 2026-08-09:
+
+- `make run-single` on `examples/downward/graph_analytics/bitcoin_path_9005418_9005413.lp` completed and produced the expected log naming pattern.
+- `python3 code/python/build-downward-closure.py` (no args) prints correct usage.
+- End-to-end downward generation currently requires providing `code/python/bin/dlv2` in this checkout.
+
+## Results Artifact
+
+The publication artifact is described in [results/README.md](results/README.md). It includes:
+
+- raw representative logs,
+- merged CSV used for plotting,
+- plotting scripts and dependencies,
+- representative output figures.
+
+The checked-in snapshot is meant for inspection and plot regeneration. Full benchmark reruns additionally require external benchmark databases and generated downward-closure inputs.
 
 ## Citation
 
-Paper citation details can be added here later.
+Paper citation details can be added here when finalized.
