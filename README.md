@@ -50,11 +50,12 @@ For two explanations, their distance is the number of database facts in their
 symmetric difference. The diversity of a set is the sum of these distances
 over all unordered pairs:
 
-$$
-d(D_i,D_j)=|(D_i\setminus D_j)\cup(D_j\setminus D_i)|,
-\qquad
-\delta(\{D_1,\ldots,D_k\})=\sum_{1\leq i<j\leq k} d(D_i,D_j).
-$$
+```math
+\begin{aligned}
+d(D_i,D_j) &= \lvert (D_i\setminus D_j)\cup(D_j\setminus D_i)\rvert, \\
+\delta(\{D_1,\ldots,D_k\}) &= \sum_{1\leq i<j\leq k} d(D_i,D_j).
+\end{aligned}
+```
 
 The exact task returns one set of maximum diversity, if at least `k`
 distinct explanations exist; otherwise it fails. It does not require
