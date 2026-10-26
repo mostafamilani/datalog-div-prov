@@ -1,7 +1,9 @@
 # Experimental results
 
 This directory contains a compact, inspectable snapshot of the experiments
-reported in the draft paper *Diverse Why-Provenance for Datalog Queries*.
+reported in *Diverse Why-Provenance for Datalog Queries*. Terminology and
+encoding names follow the arXiv extended draft, covering both arbitrary
+(`ALL`) and unambiguous (`UN`) proof trees.
 It answers three separate reproducibility questions:
 
 1. What does a successful solver run look like?
@@ -23,14 +25,35 @@ The CSV columns are:
 | --- | --- |
 | `dataset` | Scenario/dataset identifier |
 | `lp_file` | Original downward-closure input path |
-| `goal` | Query answer being explained |
-| `k` | Number of explanations requested |
+| `goal` | Answer atom whose why-provenance is being explained |
+| `k` | Diversity parameter: number of distinct explanations requested |
 | `vars` | Number of encoding variables, where recorded |
-| `diversity` | Diversity of the returned explanation set |
-| `time_ms` | End-to-end runtime in milliseconds, or a timeout marker |
+| `diversity` | Sum of pairwise symmetric-difference distances in the explanation set |
+| `time_ms` | Recorded runtime in milliseconds; see timing notes below |
 | `mode` | `optimal` (exact) or `greedy` (approximate) |
-| `source` | Proof representation and provenance semantics |
+| `source` | ILP encoding and proof-tree family |
 | `log_file` | Original experiment log path |
+
+The CSV `mode` identifies the algorithm (`optimal` for `CompDiverse`,
+`greedy` for `Approx`). CLI `MODE` instead selects the proof-tree family.
+The source identifiers present in the CSV map to the arXiv encodings as follows:
+
+| CSV source | ILP encoding |
+| --- | --- |
+| `hypertree-standard` | `hyper-ILP_ALL` |
+| `hypertree-unambigous` | `hyper-ILP_UN` |
+| `dag-unambigous` | `graph-ILP_UN` |
+
+Historical identifiers retain `standard` for arbitrary proof trees and the
+spelling `unambigous`; the corresponding arXiv terms are **arbitrary proof
+trees** and **unambiguous proof trees**. These identifiers are preserved for
+compatibility with the recorded measurements and plot filenames.
+
+The log-processing scripts extract initial-phase or cumulative solver times
+separately from program-construction time. Do not interpret `time_ms` as a
+measurement of the full workflow including downward-closure generation.
+The arXiv draft reports a 10-minute experimental timeout, which is also the plotting
+threshold; the current runner configuration has separate runtime limits.
 
 `lp_file` and `log_file` preserve paths from the experiment machine for
 traceability. They are metadata and are not expected to exist on another
@@ -70,8 +93,8 @@ python3 results/scripts/generate_plots.py \
 	--k-max 5
 ```
 
-The script produces one PDF per dataset, algorithm, proof representation, and
-provenance semantics, plus approximation-ratio plots. This fine-grained output
+The script produces one PDF per dataset, algorithm, ILP encoding, and
+proof-tree family, plus approximation-ratio plots. This fine-grained output
 corresponds to the panels composed into the paper figures.
 
 ## Included figure guide
@@ -79,19 +102,20 @@ corresponds to the panels composed into the paper figures.
 The six PDFs give exact runtime, approximate runtime, and approximation quality
 for:
 
-- CSDA on `httpd`, using unambiguous provenance with the DAG encoding.
-- Graph analytics on `facebook`, using unambiguous provenance with the DAG
-  encoding.
+- CSDA on `httpd`, using unambiguous proof trees with the graph-based ILP encoding.
+- Graph analytics on `facebook`, using unambiguous proof trees with the
+  graph-based ILP encoding.
 
 The runtime PDFs use milliseconds on a logarithmic axis. The `rate-*` PDFs plot
 the ratio `optimal diversity / approximate diversity`; a value of `1` means the
-approximate algorithm matched the optimum.
+approximation algorithm attained the optimal diversity. For `k=1`, both
+diversities are zero and the script reports a ratio of `1` by convention.
 
 ## Scope and limitations
 
 This is a results snapshot, not a claim that every experiment can be rerun from
 the two small inputs currently checked into `examples/`. Full end-to-end
 reproduction of every paper figure also requires the benchmark databases and
-all generated downward-closure inputs described in the paper. The snapshot
+all generated downward-closure inputs described in the arXiv draft. The snapshot
 does, however, make the reported measurements and plotting pipeline available
 for inspection and figure regeneration.
