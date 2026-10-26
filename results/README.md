@@ -1,8 +1,9 @@
 # Experimental results
 
 This directory contains a compact, inspectable snapshot of the experiments
-reported in *Diverse Why-Provenance for Datalog Queries*. Terminology and
-encoding names follow the arXiv extended draft, covering both arbitrary
+reported in [*Diverse Why-Provenance for Datalog Queries*
+(arXiv:2610.24707)](https://arxiv.org/abs/2610.24707). Terminology and
+encoding names follow the arXiv extended version, covering both arbitrary
 (`ALL`) and unambiguous (`UN`) proof trees.
 It answers three separate reproducibility questions:
 

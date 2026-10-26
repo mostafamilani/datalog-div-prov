@@ -5,7 +5,8 @@ It provides ILP-based computation of diverse why-provenance explanations,
 experiment runners, preprocessing tools, and an
 [experimental-results artifact](results/README.md) for the exact and
 approximation algorithms studied in the paper. This README follows the
-terminology, notation, and broader scope of the **arXiv extended draft**,
+terminology, notation, and broader scope of the
+[arXiv extended version (arXiv:2610.24707)](https://arxiv.org/abs/2610.24707),
 including both arbitrary and unambiguous proof trees.
 
 ## Datalog and Why-Provenance
@@ -417,4 +418,18 @@ inputs described in the arXiv draft.
 
 ## Citation
 
-Paper citation details can be added here when finalized.
+Marco Calautti, Mostafa Milani, and Andreas Pieris. 2026.
+*Diverse Why-Provenance for Datalog Queries*.
+[arXiv:2610.24707](https://arxiv.org/abs/2610.24707).
+
+```bibtex
+@misc{calautti2026diversewhyprovenance,
+  title         = {Diverse Why-Provenance for Datalog Queries},
+  author        = {Marco Calautti and Mostafa Milani and Andreas Pieris},
+  year          = {2026},
+  eprint        = {2610.24707},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.DB},
+  url           = {https://arxiv.org/abs/2610.24707}
+}
+```
