@@ -125,7 +125,7 @@ The simplified workflow is:
 ## What This Repository Provides
 
 - Java runners for ILP-based diverse explanation computation and batch execution.
-- Native solver libraries, JNI bindings, and upstream native sources.
+- Native solver libraries and links to upstream solver and JNI sources.
 - Python scripts for preprocessing and downward-closure generation.
 - Small downward-closure inputs for installation validation.
 - An experimental-results snapshot with merged measurements, plotting scripts,
@@ -134,10 +134,7 @@ The simplified workflow is:
 Main directories:
 
 - `code/java/`: ILP runners and additional enumeration utilities.
-- `code/c/`: symlink to the upstream native solver sources.
-- `code/java/native/`: symlink to the upstream JNI sources.
-- `external/marco/`: pinned Git submodule of Marco Calautti's repository;
-  see the [upstream source links](external/README.md) for browsing on GitLab.
+- `external/`: [upstream source links](external/README.md).
 - `code/lib/`: bundled Java and native solver dependencies.
 - `code/python/`: preprocessing and grounding helpers.
 - `config/`: default runtime configuration.
@@ -147,45 +144,14 @@ Main directories:
 
 ## Upstream Native Source
 
-The solver and JNI sources come from Marco Calautti's
+The solver and JNI sources are maintained in Marco Calautti's
 [Datalog Diverse Why-Provenance repository](https://gitlab.com/mcalautti/datalog-diverse-why-provenance).
-They are referenced through the Git submodule at `external/marco/`:
+The [source revision used by this project](https://gitlab.com/mcalautti/datalog-diverse-why-provenance/-/tree/4873700e11412c9242b6249f7aea0f488982f8ef)
+retains its own [license](https://gitlab.com/mcalautti/datalog-diverse-why-provenance/-/blob/4873700e11412c9242b6249f7aea0f488982f8ef/LICENSE).
 
-- `code/c` links to `external/marco/why-sat/src`.
-- `code/java/native` links to `external/marco/why-sat/java/native`.
-
-This repository tracks the submodule reference and these relative symlinks;
-the C++ sources and headers are tracked by the upstream repository.
-
-The submodule is pinned to commit
-[`4873700e11412c9242b6249f7aea0f488982f8ef`](https://gitlab.com/mcalautti/datalog-diverse-why-provenance/-/commit/4873700e11412c9242b6249f7aea0f488982f8ef),
-which exactly matches all 19 previously copied solver and JNI source/header
-files. This preserves the native source version used by this project. The upstream
-code retains its own [license](https://gitlab.com/mcalautti/datalog-diverse-why-provenance/-/blob/4873700e11412c9242b6249f7aea0f488982f8ef/LICENSE).
-
-GitHub's automatically generated `marco @ 4873700` link may lead to a missing
-page because the submodule is hosted on GitLab. To browse the source, use the
-[pinned GitLab revision](https://gitlab.com/mcalautti/datalog-diverse-why-provenance/-/tree/4873700e11412c9242b6249f7aea0f488982f8ef)
-or the links in [external/README.md](external/README.md).
-
-Clone this project and initialize the upstream source:
-
-```bash
-git clone https://github.com/mostafamilani/datalog-div-prov.git
-cd datalog-div-prov
-git submodule update --init external/marco
-```
-
-For an existing checkout, run the same `git submodule update` command after
-pulling changes. Initialize only `external/marco` for this project's bundled
-Java/JNI workflow: the pinned upstream revision has an incomplete nested
-submodule configuration, so recursive initialization can fail. To rebuild the
-upstream native solver, consult its [build instructions](https://gitlab.com/mcalautti/datalog-diverse-why-provenance/-/blob/4873700e11412c9242b6249f7aea0f488982f8ef/why-sat/README.md)
-and resolve those native dependencies separately.
-
-GitHub's source ZIP does not include the submodule's files; use Git and the
-initialization command above to obtain them. After switching project revisions,
-rerun that command to check out the upstream commit recorded by the project.
+The Java workflow below uses the libraries bundled in `code/lib/`. To obtain
+and rebuild the native sources, follow the upstream
+[build instructions](https://gitlab.com/mcalautti/datalog-diverse-why-provenance/-/blob/4873700e11412c9242b6249f7aea0f488982f8ef/why-sat/README.md).
 
 ## Requirements
 
